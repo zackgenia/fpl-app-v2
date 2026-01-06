@@ -45,3 +45,13 @@ This repository is deployed on Render and must always build successfully in prod
 ## When Unsure
 - Ask for clarification instead of guessing.
 - If a change risks breaking the build, choose the safer option.
+
+CRITICAL REACT RULES (DO NOT VIOLATE):
+
+- NEVER introduce hooks after conditional returns.
+- ALL hooks (useState, useMemo, useEffect, custom hooks)
+  must be declared unconditionally at the top of the component.
+- If data may be undefined, use safe defaults (?? [], ?? {}).
+- If unsure, prefer computing derived values with guards
+  instead of moving hooks.
+
