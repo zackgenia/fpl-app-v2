@@ -26,6 +26,17 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
   const teamMap = useMemo(() => new Map(teams.map(t => [t.id, t])), [teams]);
   const squadPlayerMap = useMemo(() => new Map(squad.squad.map(p => [p.id, p])), [squad.squad]);
   const { lineup, changeFormation, autoAssignPlayer, assignPlayerToSlot, clearSlot } = useLineup(squad.squad);
+  const startingXI = lineup?.startingXI ?? [];
+
+  const groupedStarting = useMemo(
+    () => ({
+      GK: startingXI.filter(s => s.position === 'GK'),
+      DEF: startingXI.filter(s => s.position === 'DEF'),
+      MID: startingXI.filter(s => s.position === 'MID'),
+      FWD: startingXI.filter(s => s.position === 'FWD'),
+    }),
+    [startingXI],
+  );
 
   const filtered = useMemo(() => {
     let list = players;
@@ -61,18 +72,8 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
     setLineupError(null);
   };
 
-  const groupedStarting = useMemo(
-    () => ({
-      GK: lineup.startingXI.filter(s => s.position === 'GK'),
-      DEF: lineup.startingXI.filter(s => s.position === 'DEF'),
-      MID: lineup.startingXI.filter(s => s.position === 'MID'),
-      FWD: lineup.startingXI.filter(s => s.position === 'FWD'),
-    }),
-    [lineup.startingXI],
-  );
-
   const lineupSlotContent = (slotId: string) => {
-    const playerId = [...lineup.startingXI, ...lineup.bench].find(s => s.id === slotId)?.playerId;
+    const playerId = [...startingXI, ...(lineup?.bench ?? [])].find(s => s.id === slotId)?.playerId;
     if (!playerId) return null;
     return squadPlayerMap.get(playerId) || null;
   };
