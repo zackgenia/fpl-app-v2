@@ -1,0 +1,166 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+body {
+  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+  min-height: 100vh;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #e2e8f0; border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+/* FDR colors */
+.fdr-1 { background: #10b981; color: white; }
+.fdr-2 { background: #34d399; color: white; }
+.fdr-3 { background: #fbbf24; color: #1f2937; }
+.fdr-4 { background: #f97316; color: white; }
+.fdr-5 { background: #ef4444; color: white; }
+
+/* Skeleton loading */
+.skeleton {
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Card styles */
+.card {
+  @apply bg-white rounded-xl border border-slate-200 shadow-sm transition-all duration-200;
+}
+
+.card:hover {
+  @apply shadow-md border-slate-300;
+}
+
+.card-hover:hover {
+  transform: translateY(-2px);
+}
+
+/* Confidence bar */
+.confidence-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.confidence-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.confidence-high { background: linear-gradient(90deg, #10b981, #059669); }
+.confidence-medium { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
+.confidence-low { background: linear-gradient(90deg, #f97316, #ef4444); }
+
+/* Reason badges */
+.reason-positive { @apply bg-emerald-50 text-emerald-700 border border-emerald-200; }
+.reason-warning { @apply bg-amber-50 text-amber-700 border border-amber-200; }
+.reason-danger { @apply bg-red-50 text-red-700 border border-red-200; }
+.reason-info { @apply bg-blue-50 text-blue-700 border border-blue-200; }
+
+/* Tooltip */
+.tooltip {
+  @apply invisible opacity-0 absolute z-50 bg-slate-900 text-white text-sm px-3 py-2 rounded-lg shadow-xl transition-all duration-200;
+}
+
+.tooltip-trigger:hover .tooltip {
+  @apply visible opacity-100;
+}
+
+/* Progress steps */
+.progress-step {
+  @apply flex items-center gap-2 text-sm text-slate-500;
+}
+
+.progress-step.active {
+  @apply text-fpl-forest font-medium;
+}
+
+.progress-step.complete {
+  @apply text-emerald-600;
+}
+
+/* Player photo */
+.player-photo {
+  @apply w-12 h-12 rounded-full object-cover object-top bg-slate-100 border-2 border-white shadow-sm;
+}
+
+/* Team badge */
+.team-badge {
+  @apply w-6 h-6 object-contain;
+}
+
+.team-badge-lg {
+  @apply w-10 h-10 object-contain;
+}
+
+/* Button variants */
+.btn-primary {
+  @apply px-4 py-2.5 bg-gradient-to-r from-fpl-forest to-fpl-pine text-white font-medium rounded-lg hover:shadow-lg transition-all;
+}
+
+.btn-secondary {
+  @apply px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded-lg transition-all;
+}
+
+.btn-ghost {
+  @apply px-4 py-2.5 text-slate-600 hover:bg-slate-100 font-medium rounded-lg transition-all;
+}
+
+/* Tab styles */
+.tab {
+  @apply px-4 py-2.5 text-sm font-medium rounded-lg transition-all;
+}
+
+.tab-active {
+  @apply bg-fpl-forest text-white shadow-md;
+}
+
+.tab-inactive {
+  @apply text-slate-600 hover:bg-slate-100;
+}
+
+/* Input styles */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Fixture strip */
+.fixture-strip {
+  @apply flex gap-1;
+}
+
+.fixture-chip {
+  @apply w-8 h-8 rounded text-xs font-bold flex items-center justify-center;
+}
+
+/* Hover card */
+.hover-card {
+  @apply absolute z-50 bg-white rounded-xl shadow-2xl border border-slate-200 p-4 min-w-[300px] animate-fade-in;
+}
+
+/* Live pulse */
+.live-pulse {
+  @apply inline-flex items-center gap-1.5;
+}
+
+.live-dot {
+  @apply w-2 h-2 rounded-full bg-red-500 animate-pulse;
+}
