@@ -1,8 +1,20 @@
-import { useState, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core';
 import { Loading, ErrorMessage, PlayerPhoto, TeamBadge } from '../components';
 import type { Player, Team, Position, SquadPlayer } from '../types';
 import { POSITION_MAP } from '../types';
 import { useLineup } from '../hooks';
+import type { LineupSlot } from '../hooks/useLineup';
 
 interface Props {
   players: Player[];
@@ -20,8 +32,198 @@ const ROW_MAX_WIDTHS: Record<number, string> = {
   2: 'max-w-[420px]',
   3: 'max-w-[600px]',
   4: 'max-w-[760px]',
-  5: 'max-w-[920px]',
+  5: 'max-w-[980px]',
 };
+
+type DragSource = 'squad' | 'slot';
+
+interface PlayerDragData {
+  type: 'player';
+  playerId: number;
+  source: DragSource;
+  slotId?: string;
+}
+
+interface SlotDropData {
+  type: 'slot';
+  slotId: string;
+}
+
+interface UnassignedDropData {
+  type: 'unassigned';
+}
+
+type DragData = PlayerDragData;
+type DropData = SlotDropData | UnassignedDropData;
+
+interface SlotCardProps {
+  slot: LineupSlot;
+  player: SquadPlayer | null;
+  team?: Team;
+  isSelected: boolean;
+  onSelect: () => void;
+  onClear: () => void;
+  onInspect: (player: SquadPlayer) => void;
+  variant: 'pitch' | 'bench';
+  compactView: boolean;
+  activeDrag: DragData | null;
+  canDropToSlot: (slot: SlotCardProps['slot'], drag: DragData) => boolean;
+}
+
+function SlotCard({
+  slot,
+  player,
+  team,
+  isSelected,
+  onSelect,
+  onClear,
+  onInspect,
+  variant,
+  compactView,
+  activeDrag,
+  canDropToSlot,
+}: SlotCardProps) {
+  const { setNodeRef: setDropRef, isOver } = useDroppable({
+    id: slot.id,
+    data: { type: 'slot', slotId: slot.id } satisfies DropData,
+  });
+  const { setNodeRef: setDragRef, attributes, listeners, transform, isDragging } = useDraggable({
+    id: `slot-${slot.id}`,
+    disabled: !player,
+    data: player
+      ? ({ type: 'player', playerId: player.id, source: 'slot', slotId: slot.id } satisfies DragData)
+      : undefined,
+  });
+  const isValidDrop = activeDrag ? canDropToSlot(slot, activeDrag) : false;
+  const isInvalidDrop = Boolean(activeDrag && isOver && !isValidDrop);
+  const highlightClass = isOver
+    ? isValidDrop
+      ? variant === 'pitch'
+        ? 'ring-2 ring-emerald-200 bg-white/15'
+        : 'ring-2 ring-emerald-400 border-emerald-300'
+      : 'ring-2 ring-red-300'
+    : '';
+  const containerClasses =
+    variant === 'pitch'
+      ? `rounded-xl border border-white/30 bg-white/10 backdrop-blur-sm transition-all w-full max-w-[170px] ${highlightClass}`
+      : `rounded-xl border border-slate-200 bg-white transition-all ${highlightClass}`;
+  const paddingClass = compactView ? 'px-3 py-2' : 'px-3 py-3';
+  const minHeightClass = compactView ? 'min-h-[66px]' : 'min-h-[84px]';
+  const dragStyle = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined;
+
+  return (
+    <div ref={setDropRef} className={`${containerClasses} ${isSelected ? (variant === 'pitch' ? 'ring-2 ring-white' : 'ring-2 ring-fpl-forest') : ''}`}>
+      <button
+        type="button"
+        ref={player ? setDragRef : undefined}
+        style={dragStyle}
+        {...(player ? attributes : {})}
+        {...(player ? listeners : {})}
+        onClick={() => (player ? onInspect(player) : onSelect())}
+        className={`w-full text-left ${paddingClass} ${minHeightClass} ${player ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging ? 'opacity-60' : ''}`}
+      >
+        {player ? (
+          <div className="flex items-center gap-3">
+            {player.photoCode && <PlayerPhoto photoCode={player.photoCode} name={player.webName} size="sm" />}
+            <div>
+              <p className={`font-semibold ${variant === 'pitch' ? 'text-white' : 'text-slate-800'}`}>{player.webName}</p>
+              <p className={`text-xs ${variant === 'pitch' ? 'text-white/80' : 'text-slate-500'}`}>{team?.shortName} • £{(player.cost / 10).toFixed(1)}m</p>
+            </div>
+          </div>
+        ) : (
+          <div className={`text-center ${variant === 'pitch' ? 'text-white/80' : 'text-slate-500'}`}>
+            <p className="text-sm font-semibold">{variant === 'pitch' ? `Empty ${slot.position}` : 'Bench Slot'}</p>
+            <p className="text-xs">{variant === 'pitch' ? 'Select slot & assign' : 'Click to select'}</p>
+          </div>
+        )}
+      </button>
+      {player && (
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation();
+            onClear();
+          }}
+          className={`w-full text-xs text-center ${variant === 'pitch' ? 'text-white/80 border-white/20 hover:bg-white/10' : 'text-slate-500 border-slate-100 hover:bg-slate-50'} py-1 border-t`}
+        >
+          Remove
+        </button>
+      )}
+    </div>
+  );
+}
+
+interface SquadCardProps {
+  player: SquadPlayer;
+  team?: Team;
+  assignment: string | null;
+  onAssign: () => void;
+  onRemove: () => void;
+}
+
+function SquadCard({ player, team, assignment, onAssign, onRemove }: SquadCardProps) {
+  const { setNodeRef, attributes, listeners, transform, isDragging } = useDraggable({
+    id: `squad-${player.id}`,
+    data: { type: 'player', playerId: player.id, source: 'squad' } satisfies DragData,
+  });
+  const dragStyle = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined;
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={dragStyle}
+      {...attributes}
+      {...listeners}
+      className={`flex items-center gap-2 px-3 py-2 bg-slate-50 rounded-lg border border-slate-200 group hover:border-slate-300 cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-60' : ''}`}
+      onClick={onAssign}
+    >
+      {player.photoCode && <PlayerPhoto photoCode={player.photoCode} name={player.webName} size="sm" />}
+      <div>
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-slate-800">{player.webName}</span>
+          {assignment && (
+            <span className={`text-[11px] px-2 py-0.5 rounded-full ${assignment === 'Starting XI' ? 'bg-fpl-forest/10 text-fpl-forest' : 'bg-slate-200 text-slate-700'}`}>
+              {assignment}
+            </span>
+          )}
+        </div>
+        <span className="text-sm text-slate-500">{team?.shortName} • £{(player.cost / 10).toFixed(1)}m</span>
+      </div>
+      <button
+        onClick={e => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        className="ml-2 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+        aria-label="Remove from squad"
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
+interface UnassignedDropZoneProps {
+  activeDrag: DragData | null;
+}
+
+function UnassignedDropZone({ activeDrag }: UnassignedDropZoneProps) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: 'unassigned-zone',
+    data: { type: 'unassigned' } satisfies DropData,
+  });
+  const highlightClass = activeDrag?.source === 'slot'
+    ? isOver
+      ? 'border-red-300 bg-red-50 text-red-700'
+      : 'border-slate-200 text-slate-500'
+    : 'border-slate-200 text-slate-400';
+
+  return (
+    <div ref={setNodeRef} className={`mt-3 rounded-lg border border-dashed px-3 py-2 text-xs text-center transition-all ${highlightClass}`}>
+      Drag here to unassign a lineup player
+    </div>
+  );
+}
 
 export function SquadBuilder({ players, teams, squad, loading, error, onRetry, onPlayerClick }: Props) {
   const [search, setSearch] = useState('');
@@ -29,11 +231,19 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
   const [addError, setAddError] = useState<string | null>(null);
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [lineupError, setLineupError] = useState<string | null>(null);
+  const [compactView, setCompactView] = useState(false);
+  const [selectedPlayer, setSelectedPlayer] = useState<SquadPlayer | null>(null);
+  const [activeDrag, setActiveDrag] = useState<DragData | null>(null);
+  const [queuedAssignments, setQueuedAssignments] = useState<Array<{ slotId: string; playerId: number }>>([]);
 
   const teamMap = useMemo(() => new Map(teams.map(t => [t.id, t])), [teams]);
+  const playerMap = useMemo(() => new Map(players.map(p => [p.id, p])), [players]);
   const squadPlayerMap = useMemo(() => new Map(squad.squad.map(p => [p.id, p])), [squad.squad]);
   const { lineup, changeFormation, autoAssignPlayer, assignPlayerToSlot, clearSlot } = useLineup(squad.squad);
   const startingXI = lineup?.startingXI ?? [];
+  const allSlots = useMemo(() => [...(lineup?.startingXI ?? []), ...(lineup?.bench ?? [])], [lineup]);
+  const slotMap = useMemo(() => new Map(allSlots.map(slot => [slot.id, slot])), [allSlots]);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   const groupedStarting = useMemo(
     () => ({
@@ -58,6 +268,126 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
     return list.sort((a, b) => b.totalPoints - a.totalPoints).slice(0, 50);
   }, [players, search, posFilter, teamMap]);
 
+  const showLineupError = useCallback((message: string) => {
+    setLineupError(message);
+    window.setTimeout(() => setLineupError(null), 3000);
+  }, []);
+
+  useEffect(() => {
+    if (queuedAssignments.length === 0) return;
+    setQueuedAssignments([]);
+    queuedAssignments.forEach(({ slotId, playerId }) => {
+      const player = squadPlayerMap.get(playerId);
+      if (!player) return;
+      const result = assignPlayerToSlot(slotId, player);
+      if (!result.success) {
+        showLineupError(result.error || 'Cannot assign player');
+      }
+    });
+  }, [assignPlayerToSlot, queuedAssignments, showLineupError, squadPlayerMap]);
+
+  const isPlayerCompatible = useCallback((slot: LineupSlot, player: SquadPlayer) => (
+    slot.role !== 'XI' || slot.position === player.position
+  ), []);
+
+  const canDropToSlot = useCallback((slot: LineupSlot, drag: DragData) => {
+    const player = squadPlayerMap.get(drag.playerId);
+    if (!player) return false;
+    if (drag.source === 'slot' && drag.slotId === slot.id) return false;
+    if (!isPlayerCompatible(slot, player)) return false;
+    if (!slot.playerId) return true;
+    if (drag.source !== 'slot' || !drag.slotId) return false;
+    const sourceSlot = slotMap.get(drag.slotId);
+    const targetPlayer = slot.playerId ? squadPlayerMap.get(slot.playerId) : null;
+    if (!sourceSlot || !targetPlayer) return false;
+    return isPlayerCompatible(sourceSlot, targetPlayer);
+  }, [isPlayerCompatible, slotMap, squadPlayerMap]);
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    const data = event.active.data.current as DragData | undefined;
+    if (data?.type === 'player') {
+      setActiveDrag(data);
+    }
+  }, []);
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const dragData = event.active.data.current as DragData | undefined;
+    const overData = event.over?.data.current as DropData | undefined;
+    setActiveDrag(null);
+    if (!dragData || dragData.type !== 'player' || !overData) return;
+    const player = squadPlayerMap.get(dragData.playerId);
+    if (!player) return;
+
+    if (overData.type === 'unassigned') {
+      if (dragData.source === 'slot' && dragData.slotId) {
+        clearSlot(dragData.slotId);
+      }
+      return;
+    }
+
+    if (overData.type !== 'slot') return;
+    const targetSlot = slotMap.get(overData.slotId);
+    if (!targetSlot) return;
+    if (dragData.source === 'slot' && dragData.slotId === targetSlot.id) return;
+
+    if (!canDropToSlot(targetSlot, dragData)) {
+      if (targetSlot.role === 'XI' && targetSlot.position !== player.position) {
+        showLineupError(`This slot needs a ${targetSlot.position}`);
+      } else if (targetSlot.playerId && dragData.source === 'slot') {
+        showLineupError('Players cannot swap into those positions');
+      } else {
+        showLineupError('Slot already has a player');
+      }
+      return;
+    }
+
+    if (targetSlot.playerId) {
+      const sourceSlot = dragData.source === 'slot' && dragData.slotId ? slotMap.get(dragData.slotId) : null;
+      const targetPlayer = targetSlot.playerId ? squadPlayerMap.get(targetSlot.playerId) : null;
+      if (!sourceSlot || !targetPlayer) {
+        showLineupError('Slot already has a player');
+        return;
+      }
+      clearSlot(sourceSlot.id);
+      clearSlot(targetSlot.id);
+      setQueuedAssignments([
+        { slotId: targetSlot.id, playerId: player.id },
+        { slotId: sourceSlot.id, playerId: targetPlayer.id },
+      ]);
+      setSelectedSlotId(null);
+      return;
+    }
+
+    if (dragData.source === 'squad') {
+      const result = assignPlayerToSlot(targetSlot.id, player);
+      if (!result.success) {
+        showLineupError(result.error || 'Cannot assign player');
+        return;
+      }
+      setSelectedSlotId(null);
+      setLineupError(null);
+      return;
+    }
+
+    if (dragData.source === 'slot' && dragData.slotId) {
+      clearSlot(dragData.slotId);
+      setQueuedAssignments([{ slotId: targetSlot.id, playerId: player.id }]);
+      setSelectedSlotId(null);
+      setLineupError(null);
+    }
+  }, [assignPlayerToSlot, canDropToSlot, clearSlot, showLineupError, slotMap, squadPlayerMap]);
+
+  useEffect(() => {
+    if (!selectedPlayer) return;
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedPlayer(null);
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [selectedPlayer]);
+
   if (loading) return <Loading message="Loading FPL data..." />;
   if (error) return <ErrorMessage message={error} onRetry={onRetry} />;
 
@@ -72,7 +402,7 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
   const handleAssignToLineup = (player: SquadPlayer) => {
     const result = selectedSlotId ? assignPlayerToSlot(selectedSlotId, player) : autoAssignPlayer(player);
     if (!result.success) {
-      setLineupError(result.error || 'Cannot assign player');
+      showLineupError(result.error || 'Cannot assign player');
       return;
     }
     setSelectedSlotId(null);
@@ -85,13 +415,17 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
     return squadPlayerMap.get(playerId) || null;
   };
 
+  const activePlayer = activeDrag ? squadPlayerMap.get(activeDrag.playerId) ?? null : null;
+  const selectedPlayerInfo = selectedPlayer ? playerMap.get(selectedPlayer.id) ?? null : null;
+
   const LineupRow = ({ label, slots }: { label: Position; slots: typeof startingXI }) => {
     const rowMaxWidth = ROW_MAX_WIDTHS[slots.length] ?? ROW_MAX_WIDTHS[5];
+    const rowGapClass = compactView ? 'gap-2' : 'gap-3';
     return (
       <div className="flex flex-col items-center gap-2 mb-4 last:mb-0">
         <p className="text-xs uppercase tracking-wide text-white/80">{label}</p>
         <div
-          className={`grid w-full ${rowMaxWidth} mx-auto gap-3 justify-items-center`}
+          className={`grid w-full ${rowMaxWidth} mx-auto ${rowGapClass} justify-items-center`}
           style={{ gridTemplateColumns: `repeat(${slots.length}, minmax(0, 1fr))` }}
         >
           {slots.map(slot => {
@@ -99,43 +433,20 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
             const team = player ? teamMap.get(player.teamId) : undefined;
             const isSelected = selectedSlotId === slot.id;
             return (
-              <div
+              <SlotCard
                 key={slot.id}
-                className={`rounded-xl border border-white/30 bg-white/10 backdrop-blur-sm transition-all w-full max-w-[170px] ${isSelected ? 'ring-2 ring-white' : ''}`}
-              >
-                <button
-                  type="button"
-                  onClick={() => setSelectedSlotId(slot.id)}
-                  className="w-full px-3 py-3 text-left"
-                >
-                  {player ? (
-                    <div className="flex items-center gap-3">
-                      {player.photoCode && <PlayerPhoto photoCode={player.photoCode} name={player.webName} size="sm" />}
-                      <div>
-                        <p className="font-semibold text-white">{player.webName}</p>
-                        <p className="text-xs text-white/80">{team?.shortName} • £{(player.cost / 10).toFixed(1)}m</p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-center text-white/80">
-                      <p className="text-sm font-semibold">Empty {slot.position}</p>
-                      <p className="text-xs">Select slot & assign</p>
-                    </div>
-                  )}
-                </button>
-                {player && (
-                  <button
-                    type="button"
-                    onClick={e => {
-                      e.stopPropagation();
-                      clearSlot(slot.id);
-                    }}
-                    className="w-full text-xs text-center text-white/80 py-1 border-t border-white/20 hover:bg-white/10"
-                  >
-                    Remove
-                  </button>
-                )}
-              </div>
+                slot={slot}
+                player={player}
+                team={team}
+                isSelected={isSelected}
+                onSelect={() => setSelectedSlotId(slot.id)}
+                onClear={() => clearSlot(slot.id)}
+                onInspect={setSelectedPlayer}
+                variant="pitch"
+                compactView={compactView}
+                activeDrag={activeDrag}
+                canDropToSlot={canDropToSlot}
+              />
             );
           })}
         </div>
@@ -144,7 +455,8 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
   };
 
   return (
-    <div className="space-y-6">
+    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+      <div className="space-y-6">
       {/* Stats header */}
       <div className="card p-6">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6">
@@ -285,25 +597,36 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
                 <h3 className="font-bold text-slate-800">Lineup Builder</h3>
                 <p className="text-sm text-slate-500">Select a slot then click a player, or click a player to auto-assign.</p>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-slate-500">Formation</span>
-                <select
-                  value={lineup.formation}
-                  onChange={e => {
-                    setSelectedSlotId(null);
-                    setLineupError(null);
-                    changeFormation(e.target.value as typeof lineup.formation);
-                  }}
-                  className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
-                >
-                  <option value="3-4-3">3-4-3</option>
-                  <option value="3-5-2">3-5-2</option>
-                  <option value="4-3-3">4-3-3</option>
-                  <option value="4-4-2">4-4-2</option>
-                  <option value="4-5-1">4-5-1</option>
-                  <option value="5-3-2">5-3-2</option>
-                  <option value="5-4-1">5-4-1</option>
-                </select>
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-2 text-sm text-slate-500">
+                  <input
+                    type="checkbox"
+                    checked={compactView}
+                    onChange={e => setCompactView(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-fpl-forest focus:ring-fpl-forest/30"
+                  />
+                  Compact view
+                </label>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-slate-500">Formation</span>
+                  <select
+                    value={lineup.formation}
+                    onChange={e => {
+                      setSelectedSlotId(null);
+                      setLineupError(null);
+                      changeFormation(e.target.value as typeof lineup.formation);
+                    }}
+                    className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                  >
+                    <option value="3-4-3">3-4-3</option>
+                    <option value="3-5-2">3-5-2</option>
+                    <option value="4-3-3">4-3-3</option>
+                    <option value="4-4-2">4-4-2</option>
+                    <option value="4-5-1">4-5-1</option>
+                    <option value="5-3-2">5-3-2</option>
+                    <option value="5-4-1">5-4-1</option>
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -331,46 +654,24 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
                   const team = player ? teamMap.get(player.teamId) : undefined;
                   const isSelected = selectedSlotId === slot.id;
                   return (
-                    <div
+                    <SlotCard
                       key={slot.id}
-                      className={`rounded-xl border border-slate-200 bg-white transition-all ${isSelected ? 'ring-2 ring-fpl-forest' : ''}`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setSelectedSlotId(slot.id)}
-                        className="w-full px-3 py-3 text-left"
-                      >
-                        {player ? (
-                          <div className="flex items-center gap-3">
-                            {player.photoCode && <PlayerPhoto photoCode={player.photoCode} name={player.webName} size="sm" />}
-                            <div>
-                              <p className="font-semibold text-slate-800">{player.webName}</p>
-                              <p className="text-xs text-slate-500">{team?.shortName} • £{(player.cost / 10).toFixed(1)}m</p>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="text-center text-slate-500">
-                            <p className="text-sm font-semibold">Bench Slot</p>
-                            <p className="text-xs">Click to select</p>
-                          </div>
-                        )}
-                      </button>
-                      {player && (
-                        <button
-                          type="button"
-                          onClick={e => {
-                            e.stopPropagation();
-                            clearSlot(slot.id);
-                          }}
-                          className="w-full text-xs text-center text-slate-500 py-1 border-t border-slate-100 hover:bg-slate-50"
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </div>
+                      slot={slot}
+                      player={player}
+                      team={team}
+                      isSelected={isSelected}
+                      onSelect={() => setSelectedSlotId(slot.id)}
+                      onClear={() => clearSlot(slot.id)}
+                      onInspect={setSelectedPlayer}
+                      variant="bench"
+                      compactView={compactView}
+                      activeDrag={activeDrag}
+                      canDropToSlot={canDropToSlot}
+                    />
                   );
                 })}
               </div>
+              <UnassignedDropZone activeDrag={activeDrag} />
             </div>
           </div>
 
@@ -403,34 +704,14 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
                           const benchSlot = lineup.bench.find(s => s.playerId === p.id);
                           const assignment = startingSlot ? 'Starting XI' : benchSlot ? 'Bench' : null;
                           return (
-                            <div
+                            <SquadCard
                               key={p.id}
-                              className="flex items-center gap-2 px-3 py-2 bg-slate-50 rounded-lg border border-slate-200 group hover:border-slate-300 cursor-pointer"
-                              onClick={() => handleAssignToLineup(p)}
-                            >
-                              {p.photoCode && <PlayerPhoto photoCode={p.photoCode} name={p.webName} size="sm" />}
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium text-slate-800">{p.webName}</span>
-                                  {assignment && (
-                                    <span className={`text-[11px] px-2 py-0.5 rounded-full ${startingSlot ? 'bg-fpl-forest/10 text-fpl-forest' : 'bg-slate-200 text-slate-700'}`}>
-                                      {assignment}
-                                    </span>
-                                  )}
-                                </div>
-                                <span className="text-sm text-slate-500">{team?.shortName} • £{(p.cost / 10).toFixed(1)}m</span>
-                              </div>
-                              <button
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  squad.removePlayer(p.id);
-                                }}
-                                className="ml-2 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                                aria-label="Remove from squad"
-                              >
-                                ✕
-                              </button>
-                            </div>
+                              player={p}
+                              team={team}
+                              assignment={assignment}
+                              onAssign={() => handleAssignToLineup(p)}
+                              onRemove={() => squad.removePlayer(p.id)}
+                            />
                           );
                         })}
                       </div>
@@ -465,6 +746,65 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
           </div>
         </div>
       )}
-    </div>
+      </div>
+
+      <DragOverlay>
+        {activePlayer ? (
+          <div className="rounded-xl border border-slate-200 bg-white shadow-lg px-3 py-2">
+            <div className="flex items-center gap-3">
+              {activePlayer.photoCode && <PlayerPhoto photoCode={activePlayer.photoCode} name={activePlayer.webName} size="sm" />}
+              <div>
+                <p className="font-semibold text-slate-800">{activePlayer.webName}</p>
+                <p className="text-xs text-slate-500">£{(activePlayer.cost / 10).toFixed(1)}m</p>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </DragOverlay>
+
+      {selectedPlayer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+              <div>
+                <p className="text-sm text-slate-500">Player details</p>
+                <h4 className="text-xl font-bold text-slate-800">{selectedPlayer.webName}</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedPlayer(null)}
+                className="h-9 w-9 rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50"
+                aria-label="Close player panel"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="px-6 py-4 space-y-4">
+              <div className="flex items-center gap-4">
+                {selectedPlayer.photoCode && <PlayerPhoto photoCode={selectedPlayer.photoCode} name={selectedPlayer.webName} size="md" />}
+                <div>
+                  <p className="text-sm text-slate-500">{teamMap.get(selectedPlayer.teamId)?.name}</p>
+                  <p className="font-semibold text-slate-800">{selectedPlayer.position} • £{(selectedPlayer.cost / 10).toFixed(1)}m</p>
+                  <p className="text-sm text-slate-500">Season points: {selectedPlayerInfo?.totalPoints ?? '—'}</p>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-sm font-semibold text-slate-700">Last 5 GWs</p>
+                <p className="text-xs text-slate-500 mt-1">Coming soon</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-sm font-semibold text-slate-700">Upcoming fixtures</p>
+                <p className="text-xs text-slate-500 mt-1">Coming soon</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-sm font-semibold text-slate-700">Minutes trend</p>
+                <p className="text-xs text-slate-500 mt-1">Coming soon</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </DndContext>
   );
 }
