@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Position, SquadPlayer } from '../types';
 
-export type Formation = '3-4-3' | '4-4-2' | '4-3-3';
+const FORMATIONS = ['3-4-3', '3-5-2', '4-3-3', '4-4-2', '4-5-1', '5-3-2', '5-4-1'] as const;
+export type Formation = (typeof FORMATIONS)[number];
 
 export interface LineupSlot {
   id: string;
@@ -18,8 +19,12 @@ interface LineupState {
 
 const FORMATION_COUNTS: Record<Formation, Record<Exclude<Position, 'GK'>, number>> = {
   '3-4-3': { DEF: 3, MID: 4, FWD: 3 },
-  '4-4-2': { DEF: 4, MID: 4, FWD: 2 },
+  '3-5-2': { DEF: 3, MID: 5, FWD: 2 },
   '4-3-3': { DEF: 4, MID: 3, FWD: 3 },
+  '4-4-2': { DEF: 4, MID: 4, FWD: 2 },
+  '4-5-1': { DEF: 4, MID: 5, FWD: 1 },
+  '5-3-2': { DEF: 5, MID: 3, FWD: 2 },
+  '5-4-1': { DEF: 5, MID: 4, FWD: 1 },
 };
 
 const STORAGE_KEY = 'fpl-lineup';
@@ -55,10 +60,9 @@ const defaultState = (formation: Formation = '3-4-3'): LineupState => ({
 
 const sanitizeState = (state: LineupState | null): LineupState => {
   if (!state) return defaultState();
-  const validFormation = (['3-4-3', '4-4-2', '4-3-3'] as Formation[]).includes(state.formation)
-    ? state.formation
-    : '3-4-3';
-  const startingXI = state.startingXI?.length ? state.startingXI : createStartingXI(validFormation);
+  const validFormation = FORMATIONS.includes(state.formation) ? state.formation : '3-4-3';
+  const expectedCount = 1 + Object.values(FORMATION_COUNTS[validFormation]).reduce((sum, value) => sum + value, 0);
+  const startingXI = state.startingXI?.length === expectedCount ? state.startingXI : createStartingXI(validFormation);
   const bench = state.bench?.length ? state.bench.slice(0, 4) : createBench();
   return {
     formation: validFormation,
@@ -135,7 +139,26 @@ export function useLineup(squadPlayers: SquadPlayer[]) {
           }
           return slot;
         });
-        return { formation, startingXI: nextStarting, bench: prev.bench };
+        const baseBench = createBench();
+        const nextBench = baseBench.map((slot, index) => {
+          const prevSlot = prev.bench[index];
+          if (prevSlot?.playerId && squadMap.has(prevSlot.playerId) && !used.has(prevSlot.playerId)) {
+            used.add(prevSlot.playerId);
+            return { ...slot, playerId: prevSlot.playerId };
+          }
+          return slot;
+        });
+        const overflow = availablePlayers.filter(p => !used.has(p.playerId) && squadMap.has(p.playerId));
+        let overflowIndex = 0;
+        const filledBench = nextBench.map(slot => {
+          if (slot.playerId) return slot;
+          const candidate = overflow[overflowIndex];
+          if (!candidate) return slot;
+          overflowIndex += 1;
+          used.add(candidate.playerId);
+          return { ...slot, playerId: candidate.playerId };
+        });
+        return { formation, startingXI: nextStarting, bench: filledBench };
       });
     },
     [lineup.formation, squadMap],

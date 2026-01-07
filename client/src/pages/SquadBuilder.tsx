@@ -15,6 +15,13 @@ interface Props {
 }
 
 const LIMITS: Record<Position, number> = { GK: 2, DEF: 5, MID: 5, FWD: 3 };
+const ROW_MAX_WIDTHS: Record<number, string> = {
+  1: 'max-w-[220px]',
+  2: 'max-w-[420px]',
+  3: 'max-w-[600px]',
+  4: 'max-w-[760px]',
+  5: 'max-w-[920px]',
+};
 
 export function SquadBuilder({ players, teams, squad, loading, error, onRetry, onPlayerClick }: Props) {
   const [search, setSearch] = useState('');
@@ -76,6 +83,64 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
     const playerId = [...startingXI, ...(lineup?.bench ?? [])].find(s => s.id === slotId)?.playerId;
     if (!playerId) return null;
     return squadPlayerMap.get(playerId) || null;
+  };
+
+  const LineupRow = ({ label, slots }: { label: Position; slots: typeof startingXI }) => {
+    const rowMaxWidth = ROW_MAX_WIDTHS[slots.length] ?? ROW_MAX_WIDTHS[5];
+    return (
+      <div className="flex flex-col items-center gap-2 mb-4 last:mb-0">
+        <p className="text-xs uppercase tracking-wide text-white/80">{label}</p>
+        <div
+          className={`grid w-full ${rowMaxWidth} mx-auto gap-3 justify-items-center`}
+          style={{ gridTemplateColumns: `repeat(${slots.length}, minmax(0, 1fr))` }}
+        >
+          {slots.map(slot => {
+            const player = lineupSlotContent(slot.id);
+            const team = player ? teamMap.get(player.teamId) : undefined;
+            const isSelected = selectedSlotId === slot.id;
+            return (
+              <div
+                key={slot.id}
+                className={`rounded-xl border border-white/30 bg-white/10 backdrop-blur-sm transition-all w-full max-w-[170px] ${isSelected ? 'ring-2 ring-white' : ''}`}
+              >
+                <button
+                  type="button"
+                  onClick={() => setSelectedSlotId(slot.id)}
+                  className="w-full px-3 py-3 text-left"
+                >
+                  {player ? (
+                    <div className="flex items-center gap-3">
+                      {player.photoCode && <PlayerPhoto photoCode={player.photoCode} name={player.webName} size="sm" />}
+                      <div>
+                        <p className="font-semibold text-white">{player.webName}</p>
+                        <p className="text-xs text-white/80">{team?.shortName} • £{(player.cost / 10).toFixed(1)}m</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center text-white/80">
+                      <p className="text-sm font-semibold">Empty {slot.position}</p>
+                      <p className="text-xs">Select slot & assign</p>
+                    </div>
+                  )}
+                </button>
+                {player && (
+                  <button
+                    type="button"
+                    onClick={e => {
+                      e.stopPropagation();
+                      clearSlot(slot.id);
+                    }}
+                    className="w-full text-xs text-center text-white/80 py-1 border-t border-white/20 hover:bg-white/10"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -232,8 +297,12 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
                   className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
                 >
                   <option value="3-4-3">3-4-3</option>
-                  <option value="4-4-2">4-4-2</option>
+                  <option value="3-5-2">3-5-2</option>
                   <option value="4-3-3">4-3-3</option>
+                  <option value="4-4-2">4-4-2</option>
+                  <option value="4-5-1">4-5-1</option>
+                  <option value="5-3-2">5-3-2</option>
+                  <option value="5-4-1">5-4-1</option>
                 </select>
               </div>
             </div>
@@ -247,55 +316,7 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
 
             <div className="mt-4 rounded-2xl bg-gradient-to-b from-fpl-forest to-fpl-pine px-4 py-6 text-white shadow-inner">
               {(['GK', 'DEF', 'MID', 'FWD'] as const).map(line => (
-                <div key={line} className="flex flex-col items-center gap-2 mb-4 last:mb-0">
-                  <p className="text-xs uppercase tracking-wide text-white/80">{line}</p>
-                  <div className="flex flex-wrap justify-center gap-3">
-                    {groupedStarting[line].map(slot => {
-                      const player = lineupSlotContent(slot.id);
-                      const team = player ? teamMap.get(player.teamId) : undefined;
-                      const isSelected = selectedSlotId === slot.id;
-                      return (
-                        <div
-                          key={slot.id}
-                          className={`rounded-xl border border-white/30 bg-white/10 backdrop-blur-sm transition-all w-36 ${isSelected ? 'ring-2 ring-white' : ''}`}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => setSelectedSlotId(slot.id)}
-                            className="w-full px-3 py-3 text-left"
-                          >
-                            {player ? (
-                              <div className="flex items-center gap-3">
-                                {player.photoCode && <PlayerPhoto photoCode={player.photoCode} name={player.webName} size="sm" />}
-                                <div>
-                                  <p className="font-semibold text-white">{player.webName}</p>
-                                  <p className="text-xs text-white/80">{team?.shortName} • £{(player.cost / 10).toFixed(1)}m</p>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="text-center text-white/80">
-                                <p className="text-sm font-semibold">Empty {slot.position}</p>
-                                <p className="text-xs">Select slot & assign</p>
-                              </div>
-                            )}
-                          </button>
-                          {player && (
-                            <button
-                              type="button"
-                              onClick={e => {
-                                e.stopPropagation();
-                                clearSlot(slot.id);
-                              }}
-                              className="w-full text-xs text-center text-white/80 py-1 border-t border-white/20 hover:bg-white/10"
-                            >
-                              Remove
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
+                <LineupRow key={line} label={line} slots={groupedStarting[line]} />
               ))}
             </div>
 
