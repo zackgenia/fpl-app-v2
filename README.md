@@ -93,4 +93,42 @@ The AI considers:
 
 ---
 
+## 📦 Data Platform (Epic 2)
+
+### Sources
+- **FPL official data** (runtime proxy, core truth).
+- **Understat** xG/xA/team xG/xGA (ingested via scheduled snapshot).
+- **FBref-like advanced stats** (optional snapshot stub only).
+- **Betting odds** (optional provider interface + mock provider).
+
+### Runtime vs ingestion
+- **Runtime**: `/api/fpl/*` proxies FPL endpoints with cache TTLs and `/api/metrics/*` serves normalized metrics.
+- **Ingested snapshots**: `/data/understat`, `/data/fbref`, `/data/odds` are read locally by the backend.
+- **No runtime scraping**: snapshot scripts are the only place where external data is fetched.
+
+### Scripts
+```bash
+node scripts/understat_fetch.js [season]
+node scripts/fbref_fetch.js
+node scripts/odds_fetch.js
+```
+
+### Feature flags
+Set environment variables to enable optional sources:
+```bash
+ENABLE_UNDERSTAT=true
+ENABLE_FBREF=true
+ENABLE_ODDS=true
+UNDERSTAT_SEASON=2024
+FBREF_SEASON=2024
+```
+
+### Mapping overrides
+Manual player mapping overrides live in `data/mappings/player_overrides.json` and are applied when matching FPL players to Understat entries.
+
+### Scheduled snapshots (optional)
+GitHub Actions workflow `.github/workflows/understat_snapshot.yml` runs `scripts/understat_fetch.js` daily and uploads the JSON snapshot as an artifact. If you prefer committing snapshots instead, run the script locally and commit the file in `data/understat/`.
+
+---
+
 Built with ❤️ for FPL managers

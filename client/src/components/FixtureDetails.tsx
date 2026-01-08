@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTeamFixturesData } from '../hooks/useDrawerData';
+import { useFixtureContext } from '../hooks/useMetrics';
 import type { EntityRef, Fixture, TeamFixtureData } from '../types';
 import { ErrorMessage, Loading, PlayerPhoto, TeamBadge } from './ui';
 import { StatsSection } from './StatsSection';
@@ -24,6 +25,7 @@ export function FixtureDetails({
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const { data, loading, error } = useTeamFixturesData(isActive);
+  const { data: fixtureContext } = useFixtureContext(fixtureId, isActive);
 
   const fixturePair: FixturePair = useMemo(() => {
     if (!data) return { homeEntry: null, awayEntry: null, homeTeam: null, awayTeam: null };
@@ -40,6 +42,9 @@ export function FixtureDetails({
   if (!fixturePair.homeEntry || !fixturePair.awayEntry || !fixturePair.homeTeam || !fixturePair.awayTeam) return null;
 
   const { homeEntry, awayEntry, homeTeam, awayTeam } = fixturePair;
+  const homeCs = fixtureContext?.cleanSheetProb?.homeCS ?? homeEntry.csChance;
+  const awayCs = fixtureContext?.cleanSheetProb?.awayCS ?? awayEntry.csChance;
+  const impliedGoals = fixtureContext?.impliedGoals;
 
   return (
     <div className="space-y-4">
@@ -103,11 +108,27 @@ export function FixtureDetails({
           </StatsSection>
           <StatsSection title="Clean Sheet Outlook">
             <p className="text-sm text-slate-600">
-              {homeTeam.shortName} CS chance: <span className="font-semibold">{homeEntry.csChance?.toFixed(0)}%</span>
+              {homeTeam.shortName} CS chance: <span className="font-semibold">{homeCs?.toFixed(0)}%</span>
             </p>
             <p className="text-sm text-slate-600 mt-1">
-              {awayTeam.shortName} CS chance: <span className="font-semibold">{awayEntry.csChance?.toFixed(0)}%</span>
+              {awayTeam.shortName} CS chance: <span className="font-semibold">{awayCs?.toFixed(0)}%</span>
             </p>
+          </StatsSection>
+          <StatsSection title="Advanced Probabilities">
+            {impliedGoals ? (
+              <div className="grid grid-cols-2 gap-3 text-center">
+                <div className="rounded-lg bg-slate-50 p-2">
+                  <p className="text-xs text-slate-500">{homeTeam.shortName} xG</p>
+                  <p className="text-lg font-semibold text-slate-800">{impliedGoals.homeXG ?? '—'}</p>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-2">
+                  <p className="text-xs text-slate-500">{awayTeam.shortName} xG</p>
+                  <p className="text-lg font-semibold text-slate-800">{impliedGoals.awayXG ?? '—'}</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">Coming soon</p>
+            )}
           </StatsSection>
         </div>
       )}

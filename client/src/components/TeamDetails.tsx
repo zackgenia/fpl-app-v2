@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useTeamFixturesData } from '../hooks/useDrawerData';
+import { useTeamMetrics } from '../hooks/useMetrics';
 import type { EntityRef } from '../types';
 import { ErrorMessage, Loading, PlayerPhoto, TeamBadge } from './ui';
 import { StatsSection } from './StatsSection';
@@ -17,8 +18,10 @@ export function TeamDetails({
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const { data, loading, error } = useTeamFixturesData(isActive);
+  const { data: teamMetrics } = useTeamMetrics(teamId, isActive);
 
   const team = data?.teams.find(t => t.id === teamId);
+  const advanced = teamMetrics?.advanced;
   const fixtures = useMemo(() => {
     if (!data) return [];
     return data.fixtures.filter(f => f.teamId === teamId).sort((a, b) => a.gameweek - b.gameweek).slice(0, 5);
@@ -112,6 +115,23 @@ export function TeamDetails({
             <p className="text-xs text-slate-500 mt-3">Chance creation metrics coming soon.</p>
           </StatsSection>
 
+          <StatsSection title="Advanced Attack">
+            {advanced ? (
+              <div className="grid grid-cols-2 gap-3 text-center">
+                <div className="rounded-lg bg-slate-50 p-2">
+                  <p className="text-xs text-slate-500">xG For</p>
+                  <p className="text-lg font-semibold text-slate-800">{advanced.xGFor ?? '—'}</p>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-2">
+                  <p className="text-xs text-slate-500">Home xG</p>
+                  <p className="text-lg font-semibold text-slate-800">{advanced.homeXGFor ?? '—'}</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">Coming soon</p>
+            )}
+          </StatsSection>
+
           <StatsSection title="Top Attackers">
             <div className="space-y-3">
               {(team.topPlayers?.topAttackers ?? []).map(player => (
@@ -155,6 +175,23 @@ export function TeamDetails({
               </div>
             </div>
             <p className="text-xs text-slate-500 mt-3">Expected goals conceded coming soon.</p>
+          </StatsSection>
+
+          <StatsSection title="Advanced Defence">
+            {advanced ? (
+              <div className="grid grid-cols-2 gap-3 text-center">
+              <div className="rounded-lg bg-slate-50 p-2">
+                  <p className="text-xs text-slate-500">xG Against</p>
+                  <p className="text-lg font-semibold text-slate-800">{advanced.xGAgainst ?? '—'}</p>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-2">
+                  <p className="text-xs text-slate-500">Away xGA</p>
+                  <p className="text-lg font-semibold text-slate-800">{advanced.awayXGAgainst ?? '—'}</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">Coming soon</p>
+            )}
           </StatsSection>
 
           <StatsSection title="Top Defenders">

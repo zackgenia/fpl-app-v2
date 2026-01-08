@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { usePlayerDetailData } from '../hooks/useDrawerData';
+import { usePlayerMetrics } from '../hooks/useMetrics';
 import type { EntityRef } from '../types';
 import { ErrorMessage, FdrChip, Loading, PlayerPhoto, TeamBadge } from './ui';
 import { StatsSection } from './StatsSection';
@@ -17,9 +18,11 @@ export function PlayerDetails({
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const { data, loading, error } = usePlayerDetailData(playerId, isActive);
+  const { data: metrics } = usePlayerMetrics(playerId, isActive);
 
   const player = data?.player;
   const positionLabel = player?.position ?? 'MID';
+  const advanced = metrics?.advanced;
 
   const fixtureList = useMemo(() => {
     if (!player?.nextFixtures) return [];
@@ -209,6 +212,27 @@ export function PlayerDetails({
               <p className="text-xs text-slate-500 mt-3">Shot quality breakdown coming soon.</p>
             </StatsSection>
           )}
+
+          <StatsSection title="Advanced Metrics">
+            {advanced ? (
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="rounded-lg bg-slate-50 p-2">
+                  <p className="text-xs text-slate-500">xG</p>
+                  <p className="text-lg font-semibold text-slate-800">{advanced.xG ?? '—'}</p>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-2">
+                  <p className="text-xs text-slate-500">xA</p>
+                  <p className="text-lg font-semibold text-slate-800">{advanced.xA ?? '—'}</p>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-2">
+                  <p className="text-xs text-slate-500">xGI</p>
+                  <p className="text-lg font-semibold text-slate-800">{advanced.xGI ?? '—'}</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">Coming soon</p>
+            )}
+          </StatsSection>
         </div>
       )}
     </div>
