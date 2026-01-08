@@ -1,387 +1,173 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Loading, ErrorMessage, TeamBadge } from '../components';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ErrorMessage, Loading, TeamBadge } from '../components';
 
-interface LiveFixture {
-  id: number;
-  event: number;
-  kickoff_time: string;
-  started: boolean;
-  finished: boolean;
-  finished_provisional: boolean;
-  team_h: number;
-  team_a: number;
-  team_h_score: number | null;
-  team_a_score: number | null;
-  team_h_difficulty: number;
-  team_a_difficulty: number;
-}
+const PREVIEW_LIMIT = 120;
 
-interface Team {
+interface BootstrapTeam {
   id: number;
   name: string;
-  short_name: string;
-  code: number;
+  shortName: string;
+  badge: string;
 }
 
-interface Event {
+interface BootstrapResponse {
+  currentGameweek: number;
+  teams: BootstrapTeam[];
+}
+
+interface LivePlayer {
   id: number;
-  name: string;
-  deadline_time: string;
-  finished: boolean;
-  is_current: boolean;
-  is_next: boolean;
+  webName: string;
+  teamId: number;
+  livePoints: number;
+  minutes: number;
+  goals: number;
+  assists: number;
+  bonus: number;
+  bps: number;
 }
 
-interface BootstrapData {
-  teams: Team[];
-  events: Event[];
+interface LiveResponse {
+  gameweek: number;
+  players: LivePlayer[];
+  lastUpdated: string;
 }
 
-function getTeamBadgeUrl(team: Team | undefined) {
-  if (!team) return '';
-  return `https://resources.premierleague.com/premierleague/badges/50/t${team.code}.png`;
-}
+async function fetchJson<T>(endpoint: string): Promise<T> {
+  const response = await fetch(endpoint);
+  const text = await response.text();
+  const preview = text.slice(0, PREVIEW_LIMIT).trim();
 
-function formatKickoff(dateStr: string): string {
-  const date = new Date(dateStr);
-  return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-}
-
-function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
-  return date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
-}
-
-function getMatchStatus(fixture: LiveFixture): { label: string; className: string } {
-  if (fixture.finished || fixture.finished_provisional) {
-    return { label: 'FT', className: 'bg-slate-600 text-white' };
+  if (!response.ok) {
+    throw new Error(`Live API request failed (${response.status}): ${preview || 'No response body'}`);
   }
-  if (fixture.started) {
-    return { label: 'LIVE', className: 'bg-red-500 text-white animate-pulse' };
+
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    throw new Error(`Expected JSON response (${response.status}): ${preview || 'No response body'}`);
   }
-  return { label: formatKickoff(fixture.kickoff_time), className: 'bg-slate-100 text-slate-600' };
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`Invalid JSON response (${response.status}): ${preview || 'No response body'}`);
+  }
 }
 
-export function Live() {
-  const [bootstrap, setBootstrap] = useState<BootstrapData | null>(null);
-  const [fixtures, setFixtures] = useState<LiveFixture[]>([]);
-  const [selectedGw, setSelectedGw] = useState<number | null>(null);
+export default function Live() {
+  const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
+  const [liveData, setLiveData] = useState<LiveResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Fetch bootstrap data (teams, events) via backend proxy
-  const fetchBootstrap = useCallback(async () => {
-    try {
-      const response = await fetch('/api/fpl/bootstrap');
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to fetch FPL data');
-      }
-      const data = await response.json();
-      setBootstrap({ teams: data.teams, events: data.events });
-      
-      // Set initial gameweek to current or next
-      const currentEvent = data.events.find((e: Event) => e.is_current) || 
-                          data.events.find((e: Event) => e.is_next) ||
-                          data.events[0];
-      if (currentEvent && selectedGw === null) {
-        setSelectedGw(currentEvent.id);
-      }
-      return data;
-    } catch (err) {
-      throw err;
-    }
-  }, [selectedGw]);
-
-  // Fetch fixtures for selected gameweek via backend proxy
-  const fetchFixtures = useCallback(async (gw: number) => {
-    try {
-      const response = await fetch(`/api/fpl/fixtures?event=${gw}`);
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to fetch fixtures');
-      }
-      const data = await response.json();
-      setFixtures(data);
-      setLastUpdated(new Date());
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load fixtures');
-    }
+  const loadLive = useCallback(async (currentGw: number) => {
+    const live = await fetchJson<LiveResponse>(`/api/live/${currentGw}`);
+    setLiveData(live);
   }, []);
 
-  // Initial load
-  useEffect(() => {
-    const init = async () => {
-      setLoading(true);
-      try {
-        await fetchBootstrap();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load');
-      } finally {
-        setLoading(false);
-      }
-    };
-    init();
-  }, [fetchBootstrap]);
-
-  // Fetch fixtures when gameweek changes
-  useEffect(() => {
-    if (selectedGw !== null) {
-      fetchFixtures(selectedGw);
+  const loadPage = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const bootstrapData = await fetchJson<BootstrapResponse>('/api/bootstrap');
+      setBootstrap(bootstrapData);
+      await loadLive(bootstrapData.currentGameweek);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load live data');
+    } finally {
+      setLoading(false);
     }
-  }, [selectedGw, fetchFixtures]);
+  }, [loadLive]);
 
-  // Auto-refresh every 30 seconds
-  useEffect(() => {
-    if (selectedGw === null) return;
-
-    // Clear any existing interval
-    if (refreshIntervalRef.current) {
-      clearInterval(refreshIntervalRef.current);
+  const handleRefresh = useCallback(async () => {
+    if (!bootstrap) return;
+    setRefreshing(true);
+    setError(null);
+    try {
+      await loadLive(bootstrap.currentGameweek);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to refresh live data');
+    } finally {
+      setRefreshing(false);
     }
+  }, [bootstrap, loadLive]);
 
-    // Set up new interval
-    refreshIntervalRef.current = setInterval(() => {
-      // Only refresh if document is visible
-      if (!document.hidden) {
-        fetchFixtures(selectedGw);
-      }
-    }, 30000);
+  useEffect(() => {
+    loadPage();
+  }, [loadPage]);
 
-    return () => {
-      if (refreshIntervalRef.current) {
-        clearInterval(refreshIntervalRef.current);
-      }
-    };
-  }, [selectedGw, fetchFixtures]);
-
-  // Group fixtures by date
-  const fixturesByDate = useMemo(() => {
-    const groups = new Map<string, LiveFixture[]>();
-    
-    fixtures.forEach(fixture => {
-      const dateKey = formatDate(fixture.kickoff_time);
-      if (!groups.has(dateKey)) {
-        groups.set(dateKey, []);
-      }
-      groups.get(dateKey)!.push(fixture);
-    });
-    
-    // Sort fixtures within each group by kickoff time
-    groups.forEach((groupFixtures) => {
-      groupFixtures.sort((a, b) => 
-        new Date(a.kickoff_time).getTime() - new Date(b.kickoff_time).getTime()
-      );
-    });
-    
-    return groups;
-  }, [fixtures]);
-
-  // Team lookup
-  const teamsById = useMemo(() => {
-    if (!bootstrap) return new Map<number, Team>();
-    return new Map(bootstrap.teams.map(t => [t.id, t]));
+  const teamMap = useMemo(() => {
+    return new Map((bootstrap?.teams ?? []).map(team => [team.id, team]));
   }, [bootstrap]);
 
-  // Event list for dropdown
-  const events = useMemo(() => {
-    if (!bootstrap) return [];
-    return bootstrap.events.filter(e => e.id <= 38);
-  }, [bootstrap]);
-
-  // Current event for display
-  const currentEvent = useMemo(() => {
-    if (!bootstrap || !selectedGw) return null;
-    return bootstrap.events.find(e => e.id === selectedGw);
-  }, [bootstrap, selectedGw]);
-
-  // Check if any fixtures are live
-  const hasLiveFixtures = useMemo(() => {
-    return fixtures.some(f => f.started && !f.finished && !f.finished_provisional);
-  }, [fixtures]);
-
-  const handlePrevGw = () => {
-    if (selectedGw && selectedGw > 1) {
-      setSelectedGw(selectedGw - 1);
-    }
-  };
-
-  const handleNextGw = () => {
-    if (selectedGw && selectedGw < 38) {
-      setSelectedGw(selectedGw + 1);
-    }
-  };
+  const sortedPlayers = useMemo(() => {
+    if (!liveData) return [];
+    return [...liveData.players].sort((a, b) => b.livePoints - a.livePoints);
+  }, [liveData]);
 
   if (loading) return <Loading message="Loading live data..." />;
-  if (error && !bootstrap) return <ErrorMessage message={error} onRetry={() => window.location.reload()} />;
+  if (error) return <ErrorMessage message={error} onRetry={loadPage} />;
+  if (!bootstrap || !liveData) return null;
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="card p-6">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-3">
-              Live
-              {hasLiveFixtures && (
-                <span className="flex items-center gap-1.5 text-sm font-medium text-red-500">
-                  <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                  Matches in progress
-                </span>
-              )}
-            </h2>
-            <p className="text-slate-500">
-              {currentEvent?.name ?? 'Gameweek'} fixtures and results
-            </p>
-          </div>
-          
-          {/* GW Selector */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handlePrevGw}
-              disabled={!selectedGw || selectedGw <= 1}
-              className="w-10 h-10 rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-slate-600 font-bold"
-            >
-              ←
-            </button>
-            
-            <select
-              value={selectedGw ?? ''}
-              onChange={e => setSelectedGw(parseInt(e.target.value))}
-              className="px-4 py-2.5 bg-white border border-slate-200 rounded-lg font-medium min-w-[160px] focus:outline-none focus:ring-2 focus:ring-fpl-forest/20"
-            >
-              {events.map(event => (
-                <option key={event.id} value={event.id}>
-                  {event.name}
-                  {event.is_current ? ' (Current)' : ''}
-                  {event.is_next && !event.is_current ? ' (Next)' : ''}
-                </option>
-              ))}
-            </select>
-            
-            <button
-              onClick={handleNextGw}
-              disabled={!selectedGw || selectedGw >= 38}
-              className="w-10 h-10 rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-slate-600 font-bold"
-            >
-              →
-            </button>
-          </div>
+      <div className="card p-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-800">Live Gameweek {liveData.gameweek}</h2>
+          <p className="text-slate-500">
+            Updated {new Date(liveData.lastUpdated).toLocaleTimeString()} • {sortedPlayers.length} players tracked
+          </p>
         </div>
-        
-        {/* Last updated */}
-        {lastUpdated && (
-          <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between text-sm text-slate-500">
-            <span>Last updated: {lastUpdated.toLocaleTimeString()}</span>
-            <button
-              onClick={() => selectedGw && fetchFixtures(selectedGw)}
-              className="text-fpl-forest hover:underline font-medium"
-            >
-              Refresh now
-            </button>
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="px-4 py-2 rounded-lg bg-fpl-forest text-white font-semibold shadow hover:bg-fpl-pine transition disabled:opacity-60"
+        >
+          {refreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
       </div>
 
-      {/* Error message (non-blocking) */}
-      {error && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-amber-700 flex items-center gap-2">
-          <span>⚠️</span> {error}
-          <button
-            onClick={() => selectedGw && fetchFixtures(selectedGw)}
-            className="ml-auto text-amber-800 font-medium hover:underline"
-          >
-            Retry
-          </button>
-        </div>
-      )}
-
-      {/* Fixtures by date */}
-      {fixtures.length === 0 ? (
-        <div className="card p-12 text-center">
-          <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <span className="text-3xl">📅</span>
-          </div>
-          <h3 className="text-xl font-bold text-slate-800 mb-2">No fixtures</h3>
-          <p className="text-slate-500">No fixtures found for this gameweek.</p>
-        </div>
-      ) : (
-        <div className="space-y-6">
-          {Array.from(fixturesByDate.entries()).map(([date, dateFixtures]) => (
-            <div key={date} className="card overflow-hidden">
-              {/* Date header */}
-              <div className="bg-slate-50 px-6 py-3 border-b border-slate-200">
-                <h3 className="font-semibold text-slate-700">{date}</h3>
-              </div>
-              
-              {/* Fixtures list */}
-              <div className="divide-y divide-slate-100">
-                {dateFixtures.map(fixture => {
-                  const homeTeam = teamsById.get(fixture.team_h);
-                  const awayTeam = teamsById.get(fixture.team_a);
-                  const status = getMatchStatus(fixture);
-                  
-                  return (
-                    <div
-                      key={fixture.id}
-                      className={`px-6 py-4 flex items-center gap-4 ${
-                        fixture.started && !fixture.finished ? 'bg-red-50/30' : ''
-                      }`}
-                    >
-                      {/* Home team */}
-                      <div className="flex-1 flex items-center justify-end gap-3">
-                        <span className="font-semibold text-slate-800 text-right">
-                          {homeTeam?.name ?? 'Unknown'}
-                        </span>
-                        <TeamBadge
-                          badge={getTeamBadgeUrl(homeTeam)}
-                          name={homeTeam?.short_name ?? ''}
-                          size="lg"
-                        />
+      <div className="card p-0 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-100 text-slate-600">
+              <tr>
+                <th className="text-left px-4 py-3 font-semibold">Player</th>
+                <th className="text-left px-4 py-3 font-semibold">Team</th>
+                <th className="text-right px-4 py-3 font-semibold">Pts</th>
+                <th className="text-right px-4 py-3 font-semibold">Min</th>
+                <th className="text-right px-4 py-3 font-semibold">G</th>
+                <th className="text-right px-4 py-3 font-semibold">A</th>
+                <th className="text-right px-4 py-3 font-semibold">Bonus</th>
+                <th className="text-right px-4 py-3 font-semibold">BPS</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {sortedPlayers.map(player => {
+                const team = teamMap.get(player.teamId);
+                return (
+                  <tr key={player.id} className="hover:bg-slate-50">
+                    <td className="px-4 py-3 font-medium text-slate-800">{player.webName}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2 text-slate-600">
+                        <TeamBadge badge={team?.badge ?? ''} name={team?.name ?? 'Unknown'} size="sm" />
+                        <span>{team?.shortName ?? 'UNK'}</span>
                       </div>
-                      
-                      {/* Score / Status */}
-                      <div className="w-28 flex flex-col items-center gap-1">
-                        {fixture.started || fixture.finished ? (
-                          <div className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                            <span>{fixture.team_h_score ?? 0}</span>
-                            <span className="text-slate-300">-</span>
-                            <span>{fixture.team_a_score ?? 0}</span>
-                          </div>
-                        ) : (
-                          <div className="text-lg font-semibold text-slate-400">vs</div>
-                        )}
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${status.className}`}>
-                          {status.label}
-                        </span>
-                      </div>
-                      
-                      {/* Away team */}
-                      <div className="flex-1 flex items-center gap-3">
-                        <TeamBadge
-                          badge={getTeamBadgeUrl(awayTeam)}
-                          name={awayTeam?.short_name ?? ''}
-                          size="lg"
-                        />
-                        <span className="font-semibold text-slate-800">
-                          {awayTeam?.name ?? 'Unknown'}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+                    </td>
+                    <td className="px-4 py-3 text-right font-semibold text-emerald-600">{player.livePoints}</td>
+                    <td className="px-4 py-3 text-right text-slate-600">{player.minutes}</td>
+                    <td className="px-4 py-3 text-right text-slate-600">{player.goals}</td>
+                    <td className="px-4 py-3 text-right text-slate-600">{player.assists}</td>
+                    <td className="px-4 py-3 text-right text-slate-600">{player.bonus}</td>
+                    <td className="px-4 py-3 text-right text-slate-600">{player.bps}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-      )}
-
-      {/* Auto-refresh notice */}
-      <div className="text-center text-sm text-slate-400">
-        Auto-refreshes every 30 seconds when page is visible
       </div>
     </div>
   );
