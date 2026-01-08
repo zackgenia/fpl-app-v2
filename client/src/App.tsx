@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useBootstrap, useSquad } from './hooks';
-import { SquadBuilder, Recommendations, FixtureTracker } from './pages';
+import { SquadBuilder, Recommendations, FixtureTracker, Live } from './pages';
 import { getLiveData } from './api';
 
-type Page = 'squad' | 'transfers' | 'fixtures';
+type Page = 'squad' | 'transfers' | 'fixtures' | 'live';
 
 function App() {
   const [page, setPage] = useState<Page>('squad');
@@ -60,6 +60,7 @@ function App() {
                 { key: 'squad', label: 'Squad', icon: '👥' },
                 { key: 'transfers', label: 'Transfers', icon: '🔄' },
                 { key: 'fixtures', label: 'Fixtures', icon: '📅' },
+                { key: 'live', label: 'Live', icon: '🔴' },
               ].map(({ key, label, icon }) => (
                 <button
                   key={key}
@@ -135,6 +136,7 @@ function App() {
           />
         )}
         {page === 'fixtures' && <FixtureTracker />}
+        {page === 'live' && <Live />}
       </main>
 
       {/* Footer */}
