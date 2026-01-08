@@ -159,9 +159,10 @@ interface SquadCardProps {
   assignment: string | null;
   onAssign: () => void;
   onRemove: () => void;
+  onInspect?: (player: SquadPlayer) => void;
 }
 
-function SquadCard({ player, team, assignment, onAssign, onRemove }: SquadCardProps) {
+function SquadCard({ player, team, assignment, onAssign, onRemove, onInspect }: SquadCardProps) {
   const { setNodeRef, attributes, listeners, transform, isDragging } = useDraggable({
     id: `squad-${player.id}`,
     data: { type: 'player', playerId: player.id, source: 'squad' } satisfies DragData,
@@ -177,18 +178,27 @@ function SquadCard({ player, team, assignment, onAssign, onRemove }: SquadCardPr
       className={`flex items-center gap-2 px-3 py-2 bg-slate-50 rounded-lg border border-slate-200 group hover:border-slate-300 cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-60' : ''}`}
       onClick={onAssign}
     >
-      {player.photoCode && <PlayerPhoto photoCode={player.photoCode} name={player.webName} size="sm" />}
-      <div>
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-slate-800">{player.webName}</span>
-          {assignment && (
-            <span className={`text-[11px] px-2 py-0.5 rounded-full ${assignment === 'Starting XI' ? 'bg-fpl-forest/10 text-fpl-forest' : 'bg-slate-200 text-slate-700'}`}>
-              {assignment}
-            </span>
-          )}
+      <button
+        type="button"
+        onClick={e => {
+          e.stopPropagation();
+          onInspect?.(player);
+        }}
+        className="flex items-center gap-2 text-left"
+      >
+        {player.photoCode && <PlayerPhoto photoCode={player.photoCode} name={player.webName} size="sm" />}
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-slate-800">{player.webName}</span>
+            {assignment && (
+              <span className={`text-[11px] px-2 py-0.5 rounded-full ${assignment === 'Starting XI' ? 'bg-fpl-forest/10 text-fpl-forest' : 'bg-slate-200 text-slate-700'}`}>
+                {assignment}
+              </span>
+            )}
+          </div>
+          <span className="text-sm text-slate-500">{team?.shortName} • £{(player.cost / 10).toFixed(1)}m</span>
         </div>
-        <span className="text-sm text-slate-500">{team?.shortName} • £{(player.cost / 10).toFixed(1)}m</span>
-      </div>
+      </button>
       <button
         onClick={e => {
           e.stopPropagation();
@@ -232,12 +242,10 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [lineupError, setLineupError] = useState<string | null>(null);
   const [compactView, setCompactView] = useState(false);
-  const [selectedPlayer, setSelectedPlayer] = useState<SquadPlayer | null>(null);
   const [activeDrag, setActiveDrag] = useState<DragData | null>(null);
   const [queuedAssignments, setQueuedAssignments] = useState<Array<{ slotId: string; playerId: number }>>([]);
 
   const teamMap = useMemo(() => new Map(teams.map(t => [t.id, t])), [teams]);
-  const playerMap = useMemo(() => new Map(players.map(p => [p.id, p])), [players]);
   const squadPlayerMap = useMemo(() => new Map(squad.squad.map(p => [p.id, p])), [squad.squad]);
   const { lineup, changeFormation, autoAssignPlayer, assignPlayerToSlot, clearSlot } = useLineup(squad.squad);
   const startingXI = lineup?.startingXI ?? [];
@@ -377,17 +385,6 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
     }
   }, [assignPlayerToSlot, canDropToSlot, clearSlot, showLineupError, slotMap, squadPlayerMap]);
 
-  useEffect(() => {
-    if (!selectedPlayer) return;
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setSelectedPlayer(null);
-      }
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [selectedPlayer]);
-
   if (loading) return <Loading message="Loading FPL data..." />;
   if (error) return <ErrorMessage message={error} onRetry={onRetry} />;
 
@@ -416,8 +413,6 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
   };
 
   const activePlayer = activeDrag ? squadPlayerMap.get(activeDrag.playerId) ?? null : null;
-  const selectedPlayerInfo = selectedPlayer ? playerMap.get(selectedPlayer.id) ?? null : null;
-
   const LineupRow = ({ label, slots }: { label: Position; slots: typeof startingXI }) => {
     const rowMaxWidth = ROW_MAX_WIDTHS[slots.length] ?? ROW_MAX_WIDTHS[5];
     const rowGapClass = compactView ? 'gap-2' : 'gap-3';
@@ -441,7 +436,7 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
                 isSelected={isSelected}
                 onSelect={() => setSelectedSlotId(slot.id)}
                 onClear={() => clearSlot(slot.id)}
-                onInspect={setSelectedPlayer}
+                onInspect={onPlayerClick ? player => onPlayerClick(player.id) : (_player) => {}}
                 variant="pitch"
                 compactView={compactView}
                 activeDrag={activeDrag}
@@ -662,7 +657,7 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
                       isSelected={isSelected}
                       onSelect={() => setSelectedSlotId(slot.id)}
                       onClear={() => clearSlot(slot.id)}
-                      onInspect={setSelectedPlayer}
+                      onInspect={onPlayerClick ? player => onPlayerClick(player.id) : (_player) => {}}
                       variant="bench"
                       compactView={compactView}
                       activeDrag={activeDrag}
@@ -711,6 +706,7 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
                               assignment={assignment}
                               onAssign={() => handleAssignToLineup(p)}
                               onRemove={() => squad.removePlayer(p.id)}
+                              onInspect={onPlayerClick ? player => onPlayerClick(player.id) : undefined}
                             />
                           );
                         })}
@@ -762,49 +758,6 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
         ) : null}
       </DragOverlay>
 
-      {selectedPlayer && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-              <div>
-                <p className="text-sm text-slate-500">Player details</p>
-                <h4 className="text-xl font-bold text-slate-800">{selectedPlayer.webName}</h4>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedPlayer(null)}
-                className="h-9 w-9 rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50"
-                aria-label="Close player panel"
-              >
-                ✕
-              </button>
-            </div>
-            <div className="px-6 py-4 space-y-4">
-              <div className="flex items-center gap-4">
-                {selectedPlayer.photoCode && <PlayerPhoto photoCode={selectedPlayer.photoCode} name={selectedPlayer.webName} size="md" />}
-                <div>
-                  <p className="text-sm text-slate-500">{teamMap.get(selectedPlayer.teamId)?.name}</p>
-                  <p className="font-semibold text-slate-800">{selectedPlayer.position} • £{(selectedPlayer.cost / 10).toFixed(1)}m</p>
-                  <p className="text-sm text-slate-500">Season points: {selectedPlayerInfo?.totalPoints ?? '—'}</p>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-sm font-semibold text-slate-700">Last 5 GWs</p>
-                <p className="text-xs text-slate-500 mt-1">Coming soon</p>
-              </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-sm font-semibold text-slate-700">Upcoming fixtures</p>
-                <p className="text-xs text-slate-500 mt-1">Coming soon</p>
-              </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-sm font-semibold text-slate-700">Minutes trend</p>
-                <p className="text-xs text-slate-500 mt-1">Coming soon</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </DndContext>
   );
 }

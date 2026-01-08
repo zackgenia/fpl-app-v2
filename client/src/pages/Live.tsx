@@ -54,7 +54,7 @@ async function fetchJson<T>(endpoint: string): Promise<T> {
   }
 }
 
-export default function Live() {
+export default function Live({ onPlayerClick }: { onPlayerClick?: (id: number) => void }) {
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
   const [liveData, setLiveData] = useState<LiveResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -149,7 +149,15 @@ export default function Live() {
                 const team = teamMap.get(player.teamId);
                 return (
                   <tr key={player.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3 font-medium text-slate-800">{player.webName}</td>
+                    <td className="px-4 py-3 font-medium text-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => onPlayerClick?.(player.id)}
+                        className="text-left text-slate-800 hover:text-fpl-forest"
+                      >
+                        {player.webName}
+                      </button>
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2 text-slate-600">
                         <TeamBadge badge={team?.badge ?? ''} name={team?.name ?? 'Unknown'} size="sm" />

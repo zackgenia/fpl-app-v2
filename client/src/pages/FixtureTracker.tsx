@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { getTeamFixtures } from '../api';
 import { Loading, ErrorMessage, TeamBadge, PlayerPhoto } from '../components';
-import type { TeamFixtureData, Fixture } from '../types';
+import type { EntityRef, TeamFixtureData, Fixture } from '../types';
 
 interface HoverInfo {
   opponentId: number;
@@ -12,7 +12,11 @@ interface HoverInfo {
   y: number;
 }
 
-export function FixtureTracker() {
+interface Props {
+  onEntityClick?: (entity: EntityRef) => void;
+}
+
+export function FixtureTracker({ onEntityClick }: Props) {
   const [data, setData] = useState<{ teams: TeamFixtureData[]; fixtures: Fixture[]; currentGameweek: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -139,6 +143,20 @@ export function FixtureTracker() {
     }, 150);
   }, []);
 
+  const handleHoverCardEnter = useCallback(() => {
+    if (hoverLeaveTimer.current) {
+      clearTimeout(hoverLeaveTimer.current);
+      hoverLeaveTimer.current = null;
+    }
+  }, []);
+
+  const handleHoverCardLeave = useCallback(() => {
+    hoverLeaveTimer.current = setTimeout(() => {
+      setIsHoverVisible(false);
+      setHoverInfo(null);
+    }, 150);
+  }, []);
+
   const getFdrClass = (d: number) => `fdr-${d}`;
   const getFdrLabel = (avg: number) => {
     if (avg <= 2) return { label: 'Excellent', color: 'text-emerald-600' };
@@ -197,10 +215,15 @@ export function FixtureTracker() {
           <p className="text-sm text-emerald-700 mt-1">Target players from these teams:</p>
           <div className="flex flex-wrap gap-2 mt-3">
             {sortedTeams.slice(0, 5).map(t => (
-              <div key={t.id} className="flex items-center gap-2 px-3 py-1.5 bg-white rounded-full border border-emerald-200">
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => onEntityClick?.({ kind: 'team', id: t.id })}
+                className="flex items-center gap-2 px-3 py-1.5 bg-white rounded-full border border-emerald-200 hover:border-emerald-300"
+              >
                 <TeamBadge badge={t.badge} name={t.name} size="sm" />
                 <span className="text-sm font-medium text-emerald-800">{t.name}</span>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -209,10 +232,15 @@ export function FixtureTracker() {
           <p className="text-sm text-red-700 mt-1">Consider selling players from:</p>
           <div className="flex flex-wrap gap-2 mt-3">
             {sortedTeams.slice(-5).reverse().map(t => (
-              <div key={t.id} className="flex items-center gap-2 px-3 py-1.5 bg-white rounded-full border border-red-200">
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => onEntityClick?.({ kind: 'team', id: t.id })}
+                className="flex items-center gap-2 px-3 py-1.5 bg-white rounded-full border border-red-200 hover:border-red-300"
+              >
                 <TeamBadge badge={t.badge} name={t.name} size="sm" />
                 <span className="text-sm font-medium text-red-800">{t.name}</span>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -245,7 +273,11 @@ export function FixtureTracker() {
                     }`}
                   >
                     <td className="py-3 px-4 sticky left-0 bg-white z-10 border-r border-slate-100">
-                      <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => onEntityClick?.({ kind: 'team', id: team.id })}
+                        className="flex items-center gap-3 text-left hover:text-fpl-forest"
+                      >
                         <TeamBadge badge={team.badge} name={team.name} size="lg" />
                         <div>
                           <p className="font-semibold text-slate-800">{team.name}</p>
@@ -255,7 +287,7 @@ export function FixtureTracker() {
                             </span>
                           </div>
                         </div>
-                      </div>
+                      </button>
                     </td>
                     <td className="py-3 px-3 text-center">
                       <div>
@@ -274,6 +306,7 @@ export function FixtureTracker() {
                             onMouseEnter={(e) => handleCellMouseEnter(fix.opponentId, team.id, fix.isHome, gw, e)}
                             onMouseMove={handleCellMouseMove}
                             onMouseLeave={handleCellMouseLeave}
+                            onClick={() => onEntityClick?.({ kind: 'fixture', id: fix.id })}
                           >
                             <p className="font-bold text-sm">{fix.opponent}</p>
                             <p className="text-[10px] opacity-80">{fix.isHome ? 'H' : 'A'}</p>
@@ -292,29 +325,43 @@ export function FixtureTracker() {
       {/* Hover card - shows OPPONENT team data */}
       {isHoverVisible && hoverInfo && hoveredOpponentData && hoveredRowTeamData && (
         <div
-          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 p-5 min-w-[340px] max-w-[400px] pointer-events-none"
+          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 p-5 min-w-[340px] max-w-[400px]"
           style={{ 
             top: Math.max(10, Math.min(hoverInfo.y - 200, window.innerHeight - 480)), 
             left: Math.min(hoverInfo.x + 25, window.innerWidth - 420),
           }}
+          onMouseEnter={handleHoverCardEnter}
+          onMouseLeave={handleHoverCardLeave}
         >
           {/* Matchup header */}
           <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
-            <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onEntityClick?.({ kind: 'team', id: hoveredRowTeamData.id })}
+              className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-fpl-forest"
+            >
               <TeamBadge badge={hoveredRowTeamData.badge} name={hoveredRowTeamData.name} size="sm" />
-              <span className="text-sm font-medium text-slate-600">{hoveredRowTeamData.shortName}</span>
-            </div>
+              <span>{hoveredRowTeamData.shortName}</span>
+            </button>
             <div className="px-3 py-1 bg-slate-100 rounded-full">
               <span className="text-xs font-bold text-slate-600">vs</span>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-slate-600">{hoveredOpponentData.shortName}</span>
+            <button
+              type="button"
+              onClick={() => onEntityClick?.({ kind: 'team', id: hoveredOpponentData.id })}
+              className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-fpl-forest"
+            >
+              <span>{hoveredOpponentData.shortName}</span>
               <TeamBadge badge={hoveredOpponentData.badge} name={hoveredOpponentData.name} size="sm" />
-            </div>
+            </button>
           </div>
 
           {/* Opponent header */}
-          <div className="flex items-center gap-3 mb-4">
+          <button
+            type="button"
+            onClick={() => onEntityClick?.({ kind: 'team', id: hoveredOpponentData.id })}
+            className="flex items-center gap-3 mb-4 text-left hover:text-fpl-forest"
+          >
             <TeamBadge badge={hoveredOpponentData.badge} name={hoveredOpponentData.name} size="lg" />
             <div>
               <h4 className="font-bold text-slate-800">{hoveredOpponentData.name}</h4>
@@ -322,7 +369,7 @@ export function FixtureTracker() {
                 {hoveredOpponentData.momentum}% momentum • GW{hoverInfo.gameweek} ({hoverInfo.isHome ? 'H' : 'A'})
               </p>
             </div>
-          </div>
+          </button>
 
           {/* Opponent stats */}
           <div className="grid grid-cols-3 gap-3 mb-4">
@@ -361,13 +408,18 @@ export function FixtureTracker() {
             <p className="text-xs font-semibold text-amber-800 uppercase mb-2">⚠️ Threats to {hoveredRowTeamData.shortName}</p>
             <div className="space-y-1.5">
               {hoveredOpponentData.topPlayers?.topAttackers?.slice(0, 2).map(p => (
-                <div key={p.id} className="flex items-center justify-between">
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => onEntityClick?.({ kind: 'player', id: p.id })}
+                  className="flex w-full items-center justify-between text-left hover:text-amber-900"
+                >
                   <div className="flex items-center gap-2">
                     <PlayerPhoto photoCode={p.photoCode} name={p.name} size="sm" />
                     <span className="text-sm font-medium text-amber-900">{p.name}</span>
                   </div>
                   <span className="text-xs text-amber-700">{p.goals}G {p.assists}A • {p.goalOdds}% goal</span>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -389,14 +441,19 @@ export function FixtureTracker() {
               <p className="text-xs font-semibold text-slate-500 uppercase mb-2">⭐ {hoveredOpponentData.shortName} Key Players</p>
               <div className="space-y-2">
                 {hoveredOpponentData.topPlayers.starPlayers.slice(0, 3).map(p => (
-                  <div key={p.id} className="flex items-center gap-2">
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => onEntityClick?.({ kind: 'player', id: p.id })}
+                    className="flex w-full items-center gap-2 text-left hover:text-fpl-forest"
+                  >
                     <PlayerPhoto photoCode={p.photoCode} name={p.name} size="sm" />
                     <div className="flex-1">
                       <p className="font-medium text-slate-800 text-sm">{p.name}</p>
                       <p className="text-xs text-slate-500">{p.position} • {p.points} pts</p>
                     </div>
                     <span className="text-xs font-medium text-fpl-forest">{p.form} form</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
@@ -408,13 +465,18 @@ export function FixtureTracker() {
               <p className="text-xs font-semibold text-slate-500 uppercase mb-2">🧤 {hoveredOpponentData.shortName} CS Assets</p>
               <div className="space-y-2">
                 {hoveredOpponentData.topPlayers.topDefenders.slice(0, 2).map(p => (
-                  <div key={p.id} className="flex items-center gap-2">
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => onEntityClick?.({ kind: 'player', id: p.id })}
+                    className="flex w-full items-center gap-2 text-left hover:text-fpl-forest"
+                  >
                     <PlayerPhoto photoCode={p.photoCode} name={p.name} size="sm" />
                     <div className="flex-1">
                       <p className="font-medium text-slate-800 text-sm">{p.name}</p>
                       <p className="text-xs text-slate-500">{p.position} • {p.cleanSheets} CS</p>
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>

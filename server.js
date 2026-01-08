@@ -787,6 +787,7 @@ app.get('/api/team-fixtures', async (req, res) => {
 
       // Home fixture
       fixtures.push({
+        id: f.id,
         teamId: f.team_h,
         gameweek: f.event,
         opponent: awayTeam?.short_name ?? 'UNK',
@@ -799,6 +800,7 @@ app.get('/api/team-fixtures', async (req, res) => {
 
       // Away fixture
       fixtures.push({
+        id: f.id,
         teamId: f.team_a,
         gameweek: f.event,
         opponent: homeTeam?.short_name ?? 'UNK',

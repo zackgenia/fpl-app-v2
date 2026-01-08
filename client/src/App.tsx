@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { useBootstrap, useSquad } from './hooks';
+import { useBootstrap, useDetailsDrawer, useSquad } from './hooks';
+import { DetailsDrawer } from './components';
 import { SquadBuilder, Recommendations, FixtureTracker, Live } from './pages';
 import { getLiveData } from './api';
 
@@ -13,6 +14,7 @@ function App() {
 
   const bootstrap = useBootstrap();
   const squad = useSquad();
+  const detailsDrawer = useDetailsDrawer();
 
   // Poll for live updates
   useEffect(() => {
@@ -125,6 +127,7 @@ function App() {
             loading={bootstrap.loading}
             error={bootstrap.error}
             onRetry={bootstrap.refresh}
+            onPlayerClick={id => detailsDrawer.openEntity({ kind: 'player', id })}
           />
         )}
         {page === 'transfers' && (
@@ -133,10 +136,15 @@ function App() {
             bank={squad.bank}
             isSquadComplete={squad.isSquadComplete}
             horizon={horizon}
+            onPlayerClick={id => detailsDrawer.openEntity({ kind: 'player', id })}
           />
         )}
-        {page === 'fixtures' && <FixtureTracker />}
-        {page === 'live' && <Live />}
+        {page === 'fixtures' && (
+          <FixtureTracker onEntityClick={entity => detailsDrawer.openEntity(entity)} />
+        )}
+        {page === 'live' && (
+          <Live onPlayerClick={id => detailsDrawer.openEntity({ kind: 'player', id })} />
+        )}
       </main>
 
       {/* Footer */}
@@ -151,6 +159,14 @@ function App() {
           </p>
         </div>
       </footer>
+
+      <DetailsDrawer
+        isOpen={detailsDrawer.isOpen}
+        stack={detailsDrawer.stack}
+        onClose={detailsDrawer.close}
+        onBack={detailsDrawer.back}
+        onPushEntity={detailsDrawer.pushEntity}
+      />
     </div>
   );
 }

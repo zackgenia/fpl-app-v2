@@ -165,6 +165,7 @@ export interface TeamFixtureData {
 }
 
 export interface Fixture {
+  id: number;
   teamId: number;
   gameweek: number;
   opponent: string;
@@ -172,8 +173,11 @@ export interface Fixture {
   opponentBadge: string;
   isHome: boolean;
   difficulty: number;
+  csChance: number;
 }
 
 export type Strategy = 'maxPoints' | 'value' | 'safety' | 'differential';
 
 export const POSITION_MAP: Record<number, Position> = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' };
+
+export type EntityRef = { kind: 'player' | 'team' | 'fixture'; id: number };
