@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useTeamFixturesData } from '../hooks/useDrawerData';
-import { useTeamMetrics } from '../hooks/useMetrics';
+import { useTeamFixturesData, useTeamInsightsData } from '../hooks/useDrawerData';
 import type { EntityRef } from '../types';
 import { ErrorMessage, Loading, PlayerPhoto, TeamBadge } from './ui';
 import { StatsSection } from './StatsSection';
@@ -18,10 +17,9 @@ export function TeamDetails({
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const { data, loading, error } = useTeamFixturesData(isActive);
-  const { data: teamMetrics } = useTeamMetrics(teamId, isActive);
+  const { data: insights } = useTeamInsightsData(teamId, isActive, 5);
 
   const team = data?.teams.find(t => t.id === teamId);
-  const advanced = teamMetrics?.advanced;
   const fixtures = useMemo(() => {
     if (!data) return [];
     return data.fixtures.filter(f => f.teamId === teamId).sort((a, b) => a.gameweek - b.gameweek).slice(0, 5);
@@ -62,6 +60,19 @@ export function TeamDetails({
 
       {activeTab === 'overview' && (
         <div className="space-y-4">
+          <StatsSection title="Strength Snapshot">
+            <div className="grid grid-cols-2 gap-3 text-center">
+              <div className="rounded-lg bg-slate-50 p-2">
+                <p className="text-xs text-slate-500">Attack Index</p>
+                <p className="text-lg font-semibold text-slate-800">{insights?.attackIndex.toFixed(2) ?? '—'}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-2">
+                <p className="text-xs text-slate-500">Defence Index</p>
+                <p className="text-lg font-semibold text-slate-800">{insights?.defenceIndex.toFixed(2) ?? '—'}</p>
+              </div>
+            </div>
+            {insights?.estimated && <p className="text-xs text-slate-400 mt-2">Estimated from recent form + FDR</p>}
+          </StatsSection>
           <StatsSection title="Form Snapshot">
             <div className="grid grid-cols-3 gap-3 text-center">
               <div className="rounded-lg bg-slate-50 p-2">
@@ -95,6 +106,12 @@ export function TeamDetails({
                 </button>
               ))}
             </div>
+            {insights?.fixtures?.length ? (
+              <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                Next CS outlook: <span className="font-semibold">{insights.upcomingCsChance.toFixed(0)}%</span> • Implied goals{' '}
+                <span className="font-semibold">{insights.impliedGoalsNext.toFixed(2)}</span>
+              </div>
+            ) : null}
           </StatsSection>
         </div>
       )}
@@ -112,24 +129,10 @@ export function TeamDetails({
                 <p className="text-lg font-semibold text-slate-800">{team.stats?.form?.toFixed(1)}</p>
               </div>
             </div>
-            <p className="text-xs text-slate-500 mt-3">Chance creation metrics coming soon.</p>
-          </StatsSection>
-
-          <StatsSection title="Advanced Attack">
-            {advanced ? (
-              <div className="grid grid-cols-2 gap-3 text-center">
-                <div className="rounded-lg bg-slate-50 p-2">
-                  <p className="text-xs text-slate-500">xG For</p>
-                  <p className="text-lg font-semibold text-slate-800">{advanced.xGFor ?? '—'}</p>
-                </div>
-                <div className="rounded-lg bg-slate-50 p-2">
-                  <p className="text-xs text-slate-500">Home xG</p>
-                  <p className="text-lg font-semibold text-slate-800">{advanced.homeXGFor ?? '—'}</p>
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm text-slate-500">Coming soon</p>
-            )}
+            <p className="text-xs text-slate-500 mt-3">
+              Attack index {insights?.attackIndex.toFixed(2) ?? '—'} • Next fixture implied goals{' '}
+              {insights?.impliedGoalsNext.toFixed(2) ?? '—'}
+            </p>
           </StatsSection>
 
           <StatsSection title="Top Attackers">
@@ -174,24 +177,10 @@ export function TeamDetails({
                 </p>
               </div>
             </div>
-            <p className="text-xs text-slate-500 mt-3">Expected goals conceded coming soon.</p>
-          </StatsSection>
-
-          <StatsSection title="Advanced Defence">
-            {advanced ? (
-              <div className="grid grid-cols-2 gap-3 text-center">
-              <div className="rounded-lg bg-slate-50 p-2">
-                  <p className="text-xs text-slate-500">xG Against</p>
-                  <p className="text-lg font-semibold text-slate-800">{advanced.xGAgainst ?? '—'}</p>
-                </div>
-                <div className="rounded-lg bg-slate-50 p-2">
-                  <p className="text-xs text-slate-500">Away xGA</p>
-                  <p className="text-lg font-semibold text-slate-800">{advanced.awayXGAgainst ?? '—'}</p>
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm text-slate-500">Coming soon</p>
-            )}
+            <p className="text-xs text-slate-500 mt-3">
+              Defence index {insights?.defenceIndex.toFixed(2) ?? '—'} • Next CS chance{' '}
+              {insights?.upcomingCsChance.toFixed(0) ?? '—'}%
+            </p>
           </StatsSection>
 
           <StatsSection title="Top Defenders">

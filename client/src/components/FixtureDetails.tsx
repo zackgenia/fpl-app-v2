@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useTeamFixturesData } from '../hooks/useDrawerData';
-import { useFixtureContext } from '../hooks/useMetrics';
+import { useFixtureInsightsData, useTeamFixturesData } from '../hooks/useDrawerData';
 import type { EntityRef, Fixture, TeamFixtureData } from '../types';
 import { ErrorMessage, Loading, PlayerPhoto, TeamBadge } from './ui';
 import { StatsSection } from './StatsSection';
@@ -25,7 +24,7 @@ export function FixtureDetails({
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const { data, loading, error } = useTeamFixturesData(isActive);
-  const { data: fixtureContext } = useFixtureContext(fixtureId, isActive);
+  const { data: insights } = useFixtureInsightsData(fixtureId, isActive, 5);
 
   const fixturePair: FixturePair = useMemo(() => {
     if (!data) return { homeEntry: null, awayEntry: null, homeTeam: null, awayTeam: null };
@@ -42,9 +41,6 @@ export function FixtureDetails({
   if (!fixturePair.homeEntry || !fixturePair.awayEntry || !fixturePair.homeTeam || !fixturePair.awayTeam) return null;
 
   const { homeEntry, awayEntry, homeTeam, awayTeam } = fixturePair;
-  const homeCs = fixtureContext?.cleanSheetProb?.homeCS ?? homeEntry.csChance;
-  const awayCs = fixtureContext?.cleanSheetProb?.awayCS ?? awayEntry.csChance;
-  const impliedGoals = fixtureContext?.impliedGoals;
 
   return (
     <div className="space-y-4">
@@ -106,29 +102,26 @@ export function FixtureDetails({
               </div>
             </div>
           </StatsSection>
+          <StatsSection title="Match Outlook">
+            <div className="grid grid-cols-2 gap-3 text-center">
+              <div className="rounded-lg bg-slate-50 p-3">
+                <p className="text-xs text-slate-500">{homeTeam.shortName} xG</p>
+                <p className="text-lg font-semibold text-slate-800">{(insights?.homeXG ?? 0).toFixed(2)}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-3">
+                <p className="text-xs text-slate-500">{awayTeam.shortName} xG</p>
+                <p className="text-lg font-semibold text-slate-800">{(insights?.awayXG ?? 0).toFixed(2)}</p>
+              </div>
+            </div>
+            {insights?.estimated && <p className="text-xs text-slate-400 mt-2">Estimated from strength + FDR</p>}
+          </StatsSection>
           <StatsSection title="Clean Sheet Outlook">
             <p className="text-sm text-slate-600">
-              {homeTeam.shortName} CS chance: <span className="font-semibold">{homeCs?.toFixed(0)}%</span>
+              {homeTeam.shortName} CS chance: <span className="font-semibold">{(insights?.homeCS ?? homeEntry.csChance ?? 0).toFixed(0)}%</span>
             </p>
             <p className="text-sm text-slate-600 mt-1">
-              {awayTeam.shortName} CS chance: <span className="font-semibold">{awayCs?.toFixed(0)}%</span>
+              {awayTeam.shortName} CS chance: <span className="font-semibold">{(insights?.awayCS ?? awayEntry.csChance ?? 0).toFixed(0)}%</span>
             </p>
-          </StatsSection>
-          <StatsSection title="Advanced Probabilities">
-            {impliedGoals ? (
-              <div className="grid grid-cols-2 gap-3 text-center">
-                <div className="rounded-lg bg-slate-50 p-2">
-                  <p className="text-xs text-slate-500">{homeTeam.shortName} xG</p>
-                  <p className="text-lg font-semibold text-slate-800">{impliedGoals.homeXG ?? '—'}</p>
-                </div>
-                <div className="rounded-lg bg-slate-50 p-2">
-                  <p className="text-xs text-slate-500">{awayTeam.shortName} xG</p>
-                  <p className="text-lg font-semibold text-slate-800">{impliedGoals.awayXG ?? '—'}</p>
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm text-slate-500">Coming soon</p>
-            )}
           </StatsSection>
         </div>
       )}
@@ -142,15 +135,19 @@ export function FixtureDetails({
                 <p className="text-lg font-semibold text-slate-800">{homeTeam.stats?.goalsPerGame?.toFixed(1)} G/G</p>
                 <p className="text-sm text-slate-500">{homeTeam.stats?.concededPerGame?.toFixed(1)} conceded</p>
                 <p className="text-sm text-slate-500">{((homeTeam.stats?.cleanSheetRate ?? 0) * 100).toFixed(0)}% CS</p>
+                <p className="text-xs text-slate-400 mt-1">Attack {insights?.attackIndex.home.toFixed(2) ?? '—'}</p>
+                <p className="text-xs text-slate-400">Defence {insights?.defenceIndex.home.toFixed(2) ?? '—'}</p>
               </div>
               <div>
                 <p className="text-xs uppercase text-slate-400">{awayTeam.shortName}</p>
                 <p className="text-lg font-semibold text-slate-800">{awayTeam.stats?.goalsPerGame?.toFixed(1)} G/G</p>
                 <p className="text-sm text-slate-500">{awayTeam.stats?.concededPerGame?.toFixed(1)} conceded</p>
                 <p className="text-sm text-slate-500">{((awayTeam.stats?.cleanSheetRate ?? 0) * 100).toFixed(0)}% CS</p>
+                <p className="text-xs text-slate-400 mt-1">Attack {insights?.attackIndex.away.toFixed(2) ?? '—'}</p>
+                <p className="text-xs text-slate-400">Defence {insights?.defenceIndex.away.toFixed(2) ?? '—'}</p>
               </div>
             </div>
-            <p className="text-xs text-slate-500 mt-3">xG matchup stats coming soon.</p>
+            <p className="text-xs text-slate-500 mt-3">Attack/defence indices are normalized vs league average.</p>
           </StatsSection>
         </div>
       )}
@@ -159,7 +156,7 @@ export function FixtureDetails({
         <div className="space-y-4">
           <StatsSection title={`${homeTeam.shortName} Key Players`}>
             <div className="space-y-2">
-              {(homeTeam.topPlayers?.starPlayers ?? []).map(player => (
+              {(insights?.homeKeyPlayers ?? homeTeam.topPlayers?.starPlayers ?? []).map(player => (
                 <button
                   key={player.id}
                   type="button"
@@ -171,10 +168,14 @@ export function FixtureDetails({
                     <p className="text-sm font-semibold text-slate-800">{player.name}</p>
                     <p className="text-xs text-slate-500">{player.position}</p>
                   </div>
-                  <span className="text-xs text-slate-500">{player.points} pts</span>
+                  {'xPts' in player ? (
+                    <span className="text-xs text-slate-500">{player.xPts.toFixed(1)} xPts</span>
+                  ) : (
+                    <span className="text-xs text-slate-500">{player.points} pts</span>
+                  )}
                 </button>
               ))}
-              {(homeTeam.topPlayers?.starPlayers ?? []).length === 0 && (
+              {(insights?.homeKeyPlayers ?? homeTeam.topPlayers?.starPlayers ?? []).length === 0 && (
                 <p className="text-sm text-slate-500">Coming soon</p>
               )}
             </div>
@@ -182,7 +183,7 @@ export function FixtureDetails({
 
           <StatsSection title={`${awayTeam.shortName} Key Players`}>
             <div className="space-y-2">
-              {(awayTeam.topPlayers?.starPlayers ?? []).map(player => (
+              {(insights?.awayKeyPlayers ?? awayTeam.topPlayers?.starPlayers ?? []).map(player => (
                 <button
                   key={player.id}
                   type="button"
@@ -194,10 +195,14 @@ export function FixtureDetails({
                     <p className="text-sm font-semibold text-slate-800">{player.name}</p>
                     <p className="text-xs text-slate-500">{player.position}</p>
                   </div>
-                  <span className="text-xs text-slate-500">{player.points} pts</span>
+                  {'xPts' in player ? (
+                    <span className="text-xs text-slate-500">{player.xPts.toFixed(1)} xPts</span>
+                  ) : (
+                    <span className="text-xs text-slate-500">{player.points} pts</span>
+                  )}
                 </button>
               ))}
-              {(awayTeam.topPlayers?.starPlayers ?? []).length === 0 && (
+              {(insights?.awayKeyPlayers ?? awayTeam.topPlayers?.starPlayers ?? []).length === 0 && (
                 <p className="text-sm text-slate-500">Coming soon</p>
               )}
             </div>
