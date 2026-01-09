@@ -2,9 +2,9 @@
   "name": "fpl-transfer-recommender",
   "version": "2.0.0",
   "description": "Advanced FPL Transfer Recommendation Tool",
-  "main": "server.js",
+  "main": "server/index.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node server/index.js",
     "build": "cd client && npm install && npm run build",
     "test": "node --test"
   },
