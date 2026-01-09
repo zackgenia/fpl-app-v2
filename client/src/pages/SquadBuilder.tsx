@@ -99,20 +99,20 @@ function SlotCard({
   const highlightClass = isOver
     ? isValidDrop
       ? variant === 'pitch'
-        ? 'ring-2 ring-emerald-200 bg-white/15'
-        : 'ring-2 ring-emerald-400 border-emerald-300'
-      : 'ring-2 ring-red-300'
+        ? 'ring-2 ring-emerald-400/50 bg-white/15'
+        : 'ring-2 ring-emerald-500/50 border-emerald-500/30'
+      : 'ring-2 ring-red-500/50'
     : '';
   const containerClasses =
     variant === 'pitch'
-      ? `rounded-xl border border-white/30 bg-white/10 backdrop-blur-sm transition-all w-full max-w-[170px] ${highlightClass}`
-      : `rounded-xl border border-slate-200 bg-white transition-all ${highlightClass}`;
-  const paddingClass = compactView ? 'px-3 py-2' : 'px-3 py-3';
-  const minHeightClass = compactView ? 'min-h-[66px]' : 'min-h-[84px]';
+      ? `rounded border border-white/30 bg-white/10 backdrop-blur-sm transition-all w-full max-w-[170px] ${highlightClass}`
+      : `rounded border border-slate-700 bg-slate-800 transition-all ${highlightClass}`;
+  const paddingClass = compactView ? 'px-2 py-1.5' : 'px-3 py-2';
+  const minHeightClass = compactView ? 'min-h-[60px]' : 'min-h-[76px]';
   const dragStyle = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined;
 
   return (
-    <div ref={setDropRef} className={`${containerClasses} ${isSelected ? (variant === 'pitch' ? 'ring-2 ring-white' : 'ring-2 ring-fpl-forest') : ''}`}>
+    <div ref={setDropRef} className={`${containerClasses} ${isSelected ? (variant === 'pitch' ? 'ring-2 ring-white' : 'ring-2 ring-emerald-500/50') : ''}`}>
       <button
         type="button"
         ref={player ? setDragRef : undefined}
@@ -123,17 +123,17 @@ function SlotCard({
         className={`w-full text-left ${paddingClass} ${minHeightClass} ${player ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging ? 'opacity-60' : ''}`}
       >
         {player ? (
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             {player.photoCode && <PlayerPhoto photoCode={player.photoCode} name={player.webName} size="sm" />}
-            <div>
-              <p className={`font-semibold ${variant === 'pitch' ? 'text-white' : 'text-slate-800'}`}>{player.webName}</p>
-              <p className={`text-xs ${variant === 'pitch' ? 'text-white/80' : 'text-slate-500'}`}>{team?.shortName} • £{(player.cost / 10).toFixed(1)}m</p>
+            <div className="min-w-0">
+              <p className={`font-medium text-sm truncate ${variant === 'pitch' ? 'text-white' : 'text-slate-200'}`}>{player.webName}</p>
+              <p className={`text-[10px] ${variant === 'pitch' ? 'text-white/70' : 'text-slate-500'}`}>{team?.shortName} • {(player.cost / 10).toFixed(1)}m</p>
             </div>
           </div>
         ) : (
-          <div className={`text-center ${variant === 'pitch' ? 'text-white/80' : 'text-slate-500'}`}>
-            <p className="text-sm font-semibold">{variant === 'pitch' ? `Empty ${slot.position}` : `Bench ${slot.position}`}</p>
-            <p className="text-xs">{variant === 'pitch' ? 'Select slot & assign' : `Needs a ${slot.position}`}</p>
+          <div className={`text-center ${variant === 'pitch' ? 'text-white/70' : 'text-slate-500'}`}>
+            <p className="text-xs font-medium">{variant === 'pitch' ? `Empty ${slot.position}` : `Bench ${slot.position}`}</p>
+            <p className="text-[10px]">{variant === 'pitch' ? 'Select & assign' : `Needs ${slot.position}`}</p>
           </div>
         )}
       </button>
@@ -144,7 +144,7 @@ function SlotCard({
             e.stopPropagation();
             onClear();
           }}
-          className={`w-full text-xs text-center ${variant === 'pitch' ? 'text-white/80 border-white/20 hover:bg-white/10' : 'text-slate-500 border-slate-100 hover:bg-slate-50'} py-1 border-t`}
+          className={`w-full text-[10px] text-center ${variant === 'pitch' ? 'text-white/70 border-white/20 hover:bg-white/10' : 'text-slate-500 border-slate-700 hover:bg-slate-700/50'} py-1 border-t`}
         >
           Remove
         </button>
@@ -175,7 +175,7 @@ function SquadCard({ player, team, assignment, onAssign, onRemove, onInspect }: 
       style={dragStyle}
       {...attributes}
       {...listeners}
-      className={`flex items-center gap-2 px-3 py-2 bg-slate-50 rounded-lg border border-slate-200 group hover:border-slate-300 cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-60' : ''}`}
+      className={`flex items-center gap-2 px-2 py-1.5 bg-slate-800/50 rounded border border-slate-700 group hover:border-slate-600 cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-60' : ''}`}
       onClick={onAssign}
     >
       <button
@@ -189,14 +189,14 @@ function SquadCard({ player, team, assignment, onAssign, onRemove, onInspect }: 
         {player.photoCode && <PlayerPhoto photoCode={player.photoCode} name={player.webName} size="sm" />}
         <div>
           <div className="flex items-center gap-2">
-            <span className="font-medium text-slate-800">{player.webName}</span>
+            <span className="font-medium text-sm text-slate-200">{player.webName}</span>
             {assignment && (
-              <span className={`text-[11px] px-2 py-0.5 rounded-full ${assignment === 'Starting XI' ? 'bg-fpl-forest/10 text-fpl-forest' : 'bg-slate-200 text-slate-700'}`}>
-                {assignment}
+              <span className={`text-[10px] px-1.5 py-0.5 rounded ${assignment === 'Starting XI' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-700 text-slate-400'}`}>
+                {assignment === 'Starting XI' ? 'XI' : 'BCH'}
               </span>
             )}
           </div>
-          <span className="text-sm text-slate-500">{team?.shortName} • £{(player.cost / 10).toFixed(1)}m</span>
+          <span className="text-[10px] text-slate-500">{team?.shortName} • {(player.cost / 10).toFixed(1)}m</span>
         </div>
       </button>
       <button
@@ -204,7 +204,7 @@ function SquadCard({ player, team, assignment, onAssign, onRemove, onInspect }: 
           e.stopPropagation();
           onRemove();
         }}
-        className="ml-2 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+        className="ml-auto text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity text-xs"
         aria-label="Remove from squad"
       >
         ✕
@@ -224,12 +224,12 @@ function UnassignedDropZone({ activeDrag }: UnassignedDropZoneProps) {
   });
   const highlightClass = activeDrag?.source === 'slot'
     ? isOver
-      ? 'border-red-300 bg-red-50 text-red-700'
-      : 'border-slate-200 text-slate-500'
-    : 'border-slate-200 text-slate-400';
+      ? 'border-red-500/50 bg-red-500/10 text-red-400'
+      : 'border-slate-600 text-slate-500'
+    : 'border-slate-700 text-slate-500';
 
   return (
-    <div ref={setNodeRef} className={`mt-3 rounded-lg border border-dashed px-3 py-2 text-xs text-center transition-all ${highlightClass}`}>
+    <div ref={setNodeRef} className={`mt-3 rounded border border-dashed px-3 py-2 text-[10px] text-center transition-all ${highlightClass}`}>
       Drag here to unassign a lineup player
     </div>
   );
@@ -468,66 +468,66 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className="space-y-6">
       {/* Stats header */}
-      <div className="card p-6">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6">
+      <div className="bg-slate-800 border border-slate-700 rounded p-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-4">
           <div>
-            <h2 className="text-2xl font-bold text-slate-800">Squad Builder</h2>
-            <p className="text-slate-500">Build your 15-player squad to get transfer recommendations</p>
+            <h2 className="text-lg font-semibold text-slate-100">Squad Builder</h2>
+            <p className="text-xs text-slate-500">Build your 15-player squad to get transfer recommendations</p>
           </div>
-          <button onClick={squad.clearSquad} className="btn-secondary text-red-600 border-red-200 hover:bg-red-50">Clear Squad</button>
+          <button onClick={squad.clearSquad} className="px-3 py-1.5 text-xs font-medium text-red-400 border border-red-500/30 rounded hover:bg-red-500/10 transition-colors">Clear Squad</button>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-xl p-4 border border-slate-200">
-            <p className="text-sm text-slate-500">Squad Size</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="bg-slate-800/50 border border-slate-700 rounded p-3">
+            <p className="text-[10px] uppercase tracking-wide text-slate-500">Squad Size</p>
             <div className="flex items-end gap-1">
-              <span className="text-3xl font-bold text-slate-800">{squad.squad.length}</span>
-              <span className="text-lg text-slate-400 mb-1">/15</span>
+              <span className="text-2xl font-bold text-slate-100 tabular-nums">{squad.squad.length}</span>
+              <span className="text-sm text-slate-500 mb-0.5">/15</span>
             </div>
-            <div className="mt-2 h-2 bg-slate-200 rounded-full overflow-hidden">
-              <div className="h-full bg-fpl-forest rounded-full transition-all" style={{ width: `${(squad.squad.length / 15) * 100}%` }} />
+            <div className="mt-2 h-1 bg-slate-700 rounded-full overflow-hidden">
+              <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${(squad.squad.length / 15) * 100}%` }} />
             </div>
           </div>
 
-          <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-xl p-4 border border-slate-200">
-            <p className="text-sm text-slate-500">Team Value</p>
-            <p className="text-3xl font-bold text-slate-800">£{(squad.squadValue / 10).toFixed(1)}m</p>
+          <div className="bg-slate-800/50 border border-slate-700 rounded p-3">
+            <p className="text-[10px] uppercase tracking-wide text-slate-500">Team Value</p>
+            <p className="text-2xl font-bold text-slate-100 tabular-nums">{(squad.squadValue / 10).toFixed(1)}m</p>
           </div>
 
-          <div className="bg-gradient-to-br from-fpl-forest/5 to-fpl-pine/10 rounded-xl p-4 border border-fpl-forest/20">
-            <p className="text-sm text-fpl-forest/70">In The Bank</p>
+          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded p-3">
+            <p className="text-[10px] uppercase tracking-wide text-emerald-400/70">In The Bank</p>
             <div className="flex items-center gap-2">
-              <span className="text-3xl font-bold text-fpl-forest">£{(squad.bank / 10).toFixed(1)}m</span>
+              <span className="text-2xl font-bold text-emerald-400 tabular-nums">{(squad.bank / 10).toFixed(1)}m</span>
               <div className="flex flex-col ml-auto">
-                <button onClick={() => squad.adjustBank(1)} className="w-7 h-5 bg-fpl-forest/10 hover:bg-fpl-forest/20 rounded-t text-fpl-forest text-xs">▲</button>
-                <button onClick={() => squad.adjustBank(-1)} className="w-7 h-5 bg-fpl-forest/10 hover:bg-fpl-forest/20 rounded-b text-fpl-forest text-xs">▼</button>
+                <button onClick={() => squad.adjustBank(1)} className="w-6 h-4 bg-emerald-500/10 hover:bg-emerald-500/20 rounded-t text-emerald-400 text-[10px]">▲</button>
+                <button onClick={() => squad.adjustBank(-1)} className="w-6 h-4 bg-emerald-500/10 hover:bg-emerald-500/20 rounded-b text-emerald-400 text-[10px]">▼</button>
               </div>
             </div>
           </div>
 
-          <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-xl p-4 border border-slate-200">
-            <p className="text-sm text-slate-500">Total Budget</p>
-            <p className={`text-3xl font-bold ${squad.squadValue + squad.bank > 1000 ? 'text-fpl-forest' : 'text-slate-800'}`}>
-              £{((squad.squadValue + squad.bank) / 10).toFixed(1)}m
+          <div className="bg-slate-800/50 border border-slate-700 rounded p-3">
+            <p className="text-[10px] uppercase tracking-wide text-slate-500">Total Budget</p>
+            <p className={`text-2xl font-bold tabular-nums ${squad.squadValue + squad.bank > 1000 ? 'text-emerald-400' : 'text-slate-100'}`}>
+              {((squad.squadValue + squad.bank) / 10).toFixed(1)}m
             </p>
           </div>
         </div>
 
         {/* Position slots */}
-        <div className="flex flex-wrap gap-3 mt-6">
+        <div className="flex flex-wrap gap-2 mt-4">
           {(['GK', 'DEF', 'MID', 'FWD'] as const).map(pos => {
             const count = squad.positionCounts[pos];
             const limit = LIMITS[pos];
             const full = count === limit;
             return (
-              <div key={pos} className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-all ${full ? 'bg-fpl-forest text-white border-fpl-forest' : 'bg-white text-slate-700 border-slate-200'}`}>
-                <span className="font-semibold">{pos}</span>
-                <div className="flex gap-1">
+              <div key={pos} className={`flex items-center gap-2 px-3 py-1.5 rounded border transition-all ${full ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-slate-800/50 text-slate-400 border-slate-700'}`}>
+                <span className="text-xs font-medium">{pos}</span>
+                <div className="flex gap-0.5">
                   {Array.from({ length: limit }).map((_, i) => (
-                    <div key={i} className={`w-2.5 h-2.5 rounded-full ${i < count ? (full ? 'bg-white' : 'bg-fpl-forest') : (full ? 'bg-white/30' : 'bg-slate-200')}`} />
+                    <div key={i} className={`w-1.5 h-1.5 rounded-full ${i < count ? (full ? 'bg-emerald-400' : 'bg-emerald-500') : 'bg-slate-600'}`} />
                   ))}
                 </div>
-                <span className={`text-sm ${full ? 'text-white/80' : 'text-slate-400'}`}>{count}/{limit}</span>
+                <span className="text-[10px] tabular-nums">{count}/{limit}</span>
               </div>
             );
           })}
@@ -535,28 +535,25 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
       </div>
 
       {addError && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-700 flex items-center gap-2">
-          <span>⚠️</span> {addError}
+        <div className="bg-red-500/10 border border-red-500/20 rounded p-3 text-red-400 flex items-center gap-2 text-sm">
+          <span>!</span> {addError}
         </div>
       )}
 
       {/* Two columns */}
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid lg:grid-cols-2 gap-4">
         {/* Search */}
-        <div className="card p-6">
-          <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-            <span className="w-8 h-8 bg-fpl-forest/10 rounded-lg flex items-center justify-center text-fpl-forest">🔍</span>
-            Search Players
-          </h3>
-          <div className="flex gap-3 mb-4">
+        <div className="bg-slate-800 border border-slate-700 rounded p-4">
+          <h3 className="font-medium text-slate-200 mb-3 text-sm">Search Players</h3>
+          <div className="flex gap-2 mb-3">
             <input
               type="text"
               placeholder="Search players or teams..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="flex-1 px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-fpl-forest/20"
+              className="flex-1 px-3 py-2 text-sm bg-slate-900 border border-slate-700 rounded text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500/50"
             />
-            <select value={posFilter} onChange={e => setPosFilter(e.target.value)} className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg">
+            <select value={posFilter} onChange={e => setPosFilter(e.target.value)} className="px-3 py-2 text-sm bg-slate-900 border border-slate-700 rounded text-slate-200">
               <option value="all">All</option>
               <option value="GK">GK</option>
               <option value="DEF">DEF</option>
@@ -565,60 +562,61 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
             </select>
           </div>
 
-          <div className="max-h-[500px] overflow-y-auto space-y-2">
+          <div className="max-h-[500px] overflow-y-auto space-y-1">
             {filtered.map(player => {
               const team = teamMap.get(player.teamId);
               const { allowed, reason } = squad.canAddPlayer(player);
               return (
-                <div
+                <button
                   key={player.id}
-                  className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all ${
-                    allowed ? 'bg-white border-slate-200 hover:border-fpl-forest/30 hover:shadow-sm' : 'bg-slate-50 border-slate-100 opacity-50'
+                  type="button"
+                  className={`flex w-full items-center justify-between p-2 rounded border cursor-pointer transition-all text-left ${
+                    allowed ? 'bg-slate-800/50 border-slate-700 hover:border-emerald-500/40' : 'bg-slate-900/50 border-slate-800 opacity-50'
                   }`}
                   onClick={() => allowed && handleAdd(player)}
                   title={reason}
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
                     <PlayerPhoto photoCode={player.photoCode} name={player.webName} size="sm" />
-                    <span className="text-xs font-medium px-2 py-1 rounded bg-fpl-forest/10 text-fpl-forest">{POSITION_MAP[player.position]}</span>
-                    <div>
-                      <p className="font-medium text-slate-800">{player.webName}</p>
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-700 text-slate-300">{POSITION_MAP[player.position]}</span>
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm text-slate-200 truncate">{player.webName}</p>
                       <div className="flex items-center gap-1">
                         {team?.badge && <TeamBadge badge={team.badge} name={team.shortName} size="sm" />}
-                        <span className="text-sm text-slate-500">{team?.shortName}</span>
+                        <span className="text-[10px] text-slate-500">{team?.shortName}</span>
                       </div>
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="font-medium text-slate-800">£{(player.cost / 10).toFixed(1)}m</p>
-                    <p className="text-sm text-slate-500">{player.totalPoints} pts</p>
+                    <p className="font-medium text-sm text-slate-200 tabular-nums">{(player.cost / 10).toFixed(1)}m</p>
+                    <p className="text-[10px] text-slate-500 tabular-nums">{player.totalPoints} pts</p>
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
         </div>
 
-        <div className="space-y-6">
+        <div className="space-y-4">
           {/* Lineup */}
-          <div className="card p-6">
+          <div className="bg-slate-800 border border-slate-700 rounded p-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h3 className="font-bold text-slate-800">Lineup Builder</h3>
-                <p className="text-sm text-slate-500">Select a slot then click a player, or click a player to auto-assign.</p>
+                <h3 className="font-medium text-slate-200 text-sm">Lineup Builder</h3>
+                <p className="text-[10px] text-slate-500">Select a slot then click a player, or click a player to auto-assign.</p>
               </div>
-              <div className="flex flex-wrap items-center gap-4">
-                <label className="flex items-center gap-2 text-sm text-slate-500">
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-[10px] text-slate-500">
                   <input
                     type="checkbox"
                     checked={compactView}
                     onChange={e => setCompactView(e.target.checked)}
-                    className="h-4 w-4 rounded border-slate-300 text-fpl-forest focus:ring-fpl-forest/30"
+                    className="h-3 w-3 rounded border-slate-600 bg-slate-900 text-emerald-500 focus:ring-emerald-500/30"
                   />
-                  Compact view
+                  Compact
                 </label>
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-slate-500">Formation</span>
+                  <span className="text-[10px] text-slate-500">Formation</span>
                   <select
                     value={lineup.formation}
                     onChange={e => {
@@ -626,7 +624,7 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
                       setLineupError(null);
                       changeFormation(e.target.value as typeof lineup.formation);
                     }}
-                    className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                    className="px-2 py-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-200"
                   >
                     <option value="3-4-3">3-4-3</option>
                     <option value="3-5-2">3-5-2</option>
@@ -641,24 +639,24 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
             </div>
 
             {lineupError && (
-              <div className="mt-3 bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded-lg text-sm flex items-center gap-2">
-                <span>⚠️</span>
+              <div className="mt-3 bg-amber-500/10 border border-amber-500/20 text-amber-400 px-3 py-2 rounded text-xs flex items-center gap-2">
+                <span>!</span>
                 <span>{lineupError}</span>
               </div>
             )}
 
-            <div className="mt-4 rounded-2xl bg-gradient-to-b from-fpl-forest to-fpl-pine px-4 py-6 text-white shadow-inner">
+            <div className="mt-4 rounded bg-gradient-to-b from-fpl-forest to-fpl-pine px-3 py-4 text-white">
               {(['GK', 'DEF', 'MID', 'FWD'] as const).map(line => (
                 <LineupRow key={line} label={line} slots={groupedStarting[line]} />
               ))}
             </div>
 
-            <div className="mt-4">
+            <div className="mt-3">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-semibold text-slate-800">Bench ({lineup.bench.length})</p>
-                <p className="text-xs text-slate-500">Position-specific slots based on formation</p>
+                <p className="text-xs font-medium text-slate-300">Bench ({lineup.bench.length})</p>
+                <p className="text-[10px] text-slate-500">Position-specific slots</p>
               </div>
-              <div className="grid sm:grid-cols-2 gap-3">
+              <div className="grid sm:grid-cols-2 gap-2">
                 {lineup.bench.map(slot => {
                   const player = lineupSlotContent(slot.id);
                   const team = player ? teamMap.get(player.teamId) : undefined;
@@ -686,28 +684,25 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
           </div>
 
           {/* Squad */}
-          <div className="card p-6">
-            <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-              <span className="w-8 h-8 bg-fpl-forest/10 rounded-lg flex items-center justify-center text-fpl-forest">👥</span>
-              Your Squad
-            </h3>
+          <div className="bg-slate-800 border border-slate-700 rounded p-4">
+            <h3 className="font-medium text-slate-200 mb-3 text-sm">Your Squad</h3>
             {squad.squad.length === 0 ? (
-              <div className="text-center py-12">
-                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <span className="text-3xl">⚽</span>
+              <div className="text-center py-8">
+                <div className="w-12 h-12 bg-slate-700 rounded flex items-center justify-center mx-auto mb-3 text-slate-500">
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
                 </div>
-                <p className="text-slate-500 mb-2">No players yet</p>
-                <p className="text-sm text-slate-400">Search and click players to add</p>
+                <p className="text-slate-400 text-sm mb-1">No players yet</p>
+                <p className="text-[10px] text-slate-500">Search and click players to add</p>
               </div>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {(['GK', 'DEF', 'MID', 'FWD'] as const).map(pos => {
                   const posPlayers = squad.squad.filter(p => p.position === pos);
                   if (posPlayers.length === 0) return null;
                   return (
                     <div key={pos}>
-                      <p className="text-xs font-semibold text-slate-500 uppercase mb-2">{pos}s ({posPlayers.length})</p>
-                      <div className="flex flex-wrap gap-2">
+                      <p className="text-[10px] font-medium text-slate-500 uppercase mb-1.5">{pos}s ({posPlayers.length})</p>
+                      <div className="flex flex-wrap gap-1.5">
                         {posPlayers.map(p => {
                           const team = teamMap.get(p.teamId);
                           const startingSlot = lineup.startingXI.find(s => s.playerId === p.id);
@@ -737,22 +732,26 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
 
       {/* Status */}
       {squad.isSquadComplete ? (
-        <div className="card p-6 bg-gradient-to-r from-fpl-forest to-fpl-pine text-white">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">✓</div>
+        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded p-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-emerald-500/20 rounded flex items-center justify-center text-emerald-400">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+            </div>
             <div>
-              <h3 className="text-lg font-bold">Squad Complete!</h3>
-              <p className="text-white/80">Head to Transfers to find your best moves</p>
+              <h3 className="text-sm font-medium text-emerald-400">Squad Complete</h3>
+              <p className="text-xs text-emerald-400/70">Head to Transfers to find your best moves</p>
             </div>
           </div>
         </div>
       ) : (
-        <div className="card p-6 bg-slate-100">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">📋</div>
+        <div className="bg-slate-800 border border-slate-700 rounded p-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-slate-700 rounded flex items-center justify-center text-slate-400">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+            </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-800">Keep Building</h3>
-              <p className="text-slate-500">Add {15 - squad.squad.length} more player{15 - squad.squad.length !== 1 ? 's' : ''}</p>
+              <h3 className="text-sm font-medium text-slate-200">Keep Building</h3>
+              <p className="text-xs text-slate-500">Add {15 - squad.squad.length} more player{15 - squad.squad.length !== 1 ? 's' : ''}</p>
             </div>
           </div>
         </div>
@@ -761,12 +760,12 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
 
       <DragOverlay>
         {activePlayer ? (
-          <div className="rounded-xl border border-slate-200 bg-white shadow-lg px-3 py-2">
-            <div className="flex items-center gap-3">
+          <div className="rounded border border-slate-600 bg-slate-800 shadow-lg px-3 py-2">
+            <div className="flex items-center gap-2">
               {activePlayer.photoCode && <PlayerPhoto photoCode={activePlayer.photoCode} name={activePlayer.webName} size="sm" />}
               <div>
-                <p className="font-semibold text-slate-800">{activePlayer.webName}</p>
-                <p className="text-xs text-slate-500">£{(activePlayer.cost / 10).toFixed(1)}m</p>
+                <p className="font-medium text-sm text-slate-200">{activePlayer.webName}</p>
+                <p className="text-[10px] text-slate-500">{(activePlayer.cost / 10).toFixed(1)}m</p>
               </div>
             </div>
           </div>

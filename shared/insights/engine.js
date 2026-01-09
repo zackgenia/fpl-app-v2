@@ -175,7 +175,8 @@ function calculateExpectedMinutes(history, availability, player) {
     : 0.95;
 
   // For returning players, be more optimistic about minutes
-  const returningBoost = isReturning ? 1.1 : 1.0;
+  // Elite returning players get even more boost (they usually reclaim starting spot quickly)
+  const returningBoost = isReturning ? 1.15 : 1.0;
 
   const expectedMinutes = clamp(avgMinutes * roleFactor * availabilityFactor * returningBoost, 0, 90);
 
@@ -185,23 +186,42 @@ function calculateExpectedMinutes(history, availability, player) {
 // ============================================
 // IMPROVED: Season baseline calculation
 // Uses points per game as anchor with form modifier
+// Better handling of injury returns and elite players
 // ============================================
-function calculateSeasonBaseline(player, history) {
+function calculateSeasonBaseline(player, history, isReturning = false) {
   const totalPoints = player.total_points ?? player.totalPoints ?? 0;
   const totalMinutes = player.minutes ?? 0;
 
   // Points per 90 minutes (season average)
   const pp90 = totalMinutes > 0 ? (totalPoints / totalMinutes) * 90 : 0;
 
-  // Points per game (for players who get rotated)
-  const gamesPlayed = history?.filter(h => (h.minutes ?? 0) > 0).length || 0;
+  // Points per game (for players who get rotated) - only count games with meaningful minutes
+  const gamesWithMinutes = history?.filter(h => (h.minutes ?? 0) >= 45) || [];
+  const gamesPlayed = gamesWithMinutes.length || 0;
   const ppg = gamesPlayed > 0 ? totalPoints / gamesPlayed : 0;
 
-  // Recent form (last 5 games where they played)
-  const recentGames = (history || [])
-    .filter(h => (h.minutes ?? 0) > 0)
-    .sort((a, b) => (b.round ?? 0) - (a.round ?? 0))
-    .slice(0, 5);
+  // Detect elite player: top performers based on season total and PPG
+  // Elite threshold: ~5+ PPG for their position or high total points
+  const position = player.element_type ?? player.position;
+  const eliteThreshold = position === 1 ? 4.5 : position === 2 ? 4.5 : position === 3 ? 5.0 : 4.8;
+  const isElite = ppg >= eliteThreshold || totalPoints >= 100;
+
+  // For returning players or elite players, use a larger sample of FIT games only
+  // This prevents injury blanks from dragging down the form calculation
+  let recentGames;
+  if (isReturning || isElite) {
+    // Use games where player had significant minutes (45+), last 8 such games
+    recentGames = (history || [])
+      .filter(h => (h.minutes ?? 0) >= 45)
+      .sort((a, b) => (b.round ?? 0) - (a.round ?? 0))
+      .slice(0, 8);
+  } else {
+    // Normal: last 5 games where they played any minutes
+    recentGames = (history || [])
+      .filter(h => (h.minutes ?? 0) > 0)
+      .sort((a, b) => (b.round ?? 0) - (a.round ?? 0))
+      .slice(0, 5);
+  }
 
   const recentPP90 = recentGames.length > 0
     ? recentGames.reduce((sum, h) => sum + (h.total_points ?? 0), 0) /
@@ -210,7 +230,12 @@ function calculateSeasonBaseline(player, history) {
 
   // Form trend: compare recent to season average
   const formRatio = pp90 > 0 ? recentPP90 / pp90 : 1;
-  const formMultiplier = clamp(0.85 + (formRatio - 1) * 0.15, 0.85, 1.2);
+
+  // Wider form range for elite players (they've proven their quality)
+  // Elite players: 0.90 to 1.25, normal: 0.85 to 1.20
+  const formMultiplier = isElite
+    ? clamp(0.90 + (formRatio - 1) * 0.20, 0.90, 1.25)
+    : clamp(0.85 + (formRatio - 1) * 0.15, 0.85, 1.20);
 
   return {
     pp90,
@@ -220,6 +245,7 @@ function calculateSeasonBaseline(player, history) {
     gamesPlayed,
     totalMinutes,
     totalPoints,
+    isElite,
   };
 }
 
@@ -322,6 +348,7 @@ function computeAttackingOutputs({
 
 // ============================================
 // IMPROVED: Points mapping with better baseline
+// Better handling for elite players and injury returns
 // ============================================
 function mapExpectedPoints({
   position,
@@ -351,14 +378,23 @@ function mapExpectedPoints({
   let total = appearancePoints + goalPoints + assistPoints + cleanSheetPoints + bonusPoints;
 
   // Anchor to season baseline if available (prevents extreme predictions)
-  if (seasonBaseline?.ppg > 0 && minutesFactor > 0.5) {
+  // Lower threshold (0.35 instead of 0.5) so anchor applies more often
+  // Elite players get stronger baseline anchoring (they've proven their quality)
+  if (seasonBaseline?.ppg > 0 && minutesFactor > 0.35) {
     const rawPrediction = total;
-    const baselineAnchor = seasonBaseline.ppg * 0.3; // 30% weight to baseline
-    const predictionWeight = 0.7; // 70% weight to calculated prediction
-    total = (rawPrediction * predictionWeight) + (baselineAnchor);
+
+    // Elite players: 40% baseline weight (trust their proven quality more)
+    // Normal players: 30% baseline weight
+    const isElite = seasonBaseline.isElite ?? false;
+    const baselineWeight = isElite ? 0.40 : 0.30;
+    const predictionWeight = 1 - baselineWeight;
+
+    const baselineAnchor = seasonBaseline.ppg * baselineWeight;
+    total = (rawPrediction * predictionWeight) + baselineAnchor;
 
     // Clamp to reasonable range based on position
-    const positionCap = position === 'GK' ? 8 : position === 'DEF' ? 10 : position === 'MID' ? 12 : 10;
+    // Elite players get slightly higher caps
+    const positionCap = position === 'GK' ? 8 : position === 'DEF' ? (isElite ? 11 : 10) : position === 'MID' ? 12 : 10;
     total = clamp(total, 1, positionCap);
   }
 
@@ -391,11 +427,11 @@ function projectPlayer({
   const availability = player.chance_of_playing_next_round ?? player.chanceOfPlaying ?? 90;
   const history = player.history || [];
 
-  // Calculate season baseline
-  const seasonBaseline = calculateSeasonBaseline(player, history);
-
-  // Calculate expected minutes with returning player detection
+  // Calculate expected minutes with returning player detection (do this first to get isReturning flag)
   const { expectedMinutes, isReturning, avgMinutes } = calculateExpectedMinutes(history, availability, player);
+
+  // Calculate season baseline (pass isReturning for better form calculation)
+  const seasonBaseline = calculateSeasonBaseline(player, history, isReturning);
 
   const fixtureProjections = fixtures.map((fixture, index) => {
     const opponentStrength = strengthMap.get(fixture.opponentId);
@@ -537,8 +573,10 @@ function projectPlayer({
       ppg: seasonBaseline.ppg,
       pp90: seasonBaseline.pp90,
       gamesPlayed: seasonBaseline.gamesPlayed,
+      isElite: seasonBaseline.isElite,
     },
     isReturning,
+    isElite: seasonBaseline.isElite,
   };
 }
 

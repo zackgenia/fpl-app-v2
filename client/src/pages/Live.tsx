@@ -111,65 +111,86 @@ export default function Live({ onPlayerClick }: { onPlayerClick?: (id: number) =
   if (!bootstrap || !liveData) return null;
 
   return (
-    <div className="space-y-6">
-      <div className="card p-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">Live Gameweek {liveData.gameweek}</h2>
-          <p className="text-slate-500">
-            Updated {new Date(liveData.lastUpdated).toLocaleTimeString()} • {sortedPlayers.length} players tracked
+          <h2 className="text-xl font-semibold text-slate-100">
+            Live GW{liveData.gameweek}
+          </h2>
+          <p className="text-sm text-slate-500 font-mono">
+            {new Date(liveData.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} | {sortedPlayers.length} players
           </p>
         </div>
         <button
           type="button"
           onClick={handleRefresh}
           disabled={refreshing}
-          className="px-4 py-2 rounded-lg bg-fpl-forest text-white font-semibold shadow hover:bg-fpl-pine transition disabled:opacity-60"
+          className="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm font-medium transition-colors disabled:opacity-50"
         >
-          {refreshing ? 'Refreshing…' : 'Refresh'}
+          {refreshing ? 'Refreshing...' : 'Refresh'}
         </button>
       </div>
 
-      <div className="card p-0 overflow-hidden">
+      {/* Financial-style Table */}
+      <div className="bg-slate-800 border border-slate-700 rounded overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-100 text-slate-600">
-              <tr>
-                <th className="text-left px-4 py-3 font-semibold">Player</th>
-                <th className="text-left px-4 py-3 font-semibold">Team</th>
-                <th className="text-right px-4 py-3 font-semibold">Pts</th>
-                <th className="text-right px-4 py-3 font-semibold">Min</th>
-                <th className="text-right px-4 py-3 font-semibold">G</th>
-                <th className="text-right px-4 py-3 font-semibold">A</th>
-                <th className="text-right px-4 py-3 font-semibold">Bonus</th>
-                <th className="text-right px-4 py-3 font-semibold">BPS</th>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-700 text-xs uppercase text-slate-500">
+                <th className="text-left px-3 py-2 font-medium">Player</th>
+                <th className="text-left px-3 py-2 font-medium">Team</th>
+                <th className="text-right px-3 py-2 font-medium">Pts</th>
+                <th className="text-right px-3 py-2 font-medium">Min</th>
+                <th className="text-right px-3 py-2 font-medium">G</th>
+                <th className="text-right px-3 py-2 font-medium">A</th>
+                <th className="text-right px-3 py-2 font-medium">Bon</th>
+                <th className="text-right px-3 py-2 font-medium">BPS</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {sortedPlayers.map(player => {
+            <tbody>
+              {sortedPlayers.map((player, idx) => {
                 const team = teamMap.get(player.teamId);
                 return (
-                  <tr key={player.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3 font-medium text-slate-800">
+                  <tr
+                    key={player.id}
+                    className={`border-b border-slate-800 hover:bg-slate-700/50 transition-colors ${
+                      idx % 2 === 0 ? 'bg-slate-800/30' : ''
+                    }`}
+                  >
+                    <td className="px-3 py-2">
                       <button
                         type="button"
                         onClick={() => onPlayerClick?.(player.id)}
-                        className="text-left text-slate-800 hover:text-fpl-forest"
+                        className="text-slate-200 hover:text-emerald-400 font-medium transition-colors"
                       >
                         {player.webName}
                       </button>
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2 text-slate-600">
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2 text-slate-400">
                         <TeamBadge badge={team?.badge ?? ''} name={team?.name ?? 'Unknown'} size="sm" />
-                        <span>{team?.shortName ?? 'UNK'}</span>
+                        <span className="text-xs">{team?.shortName ?? 'UNK'}</span>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right font-semibold text-emerald-600">{player.livePoints}</td>
-                    <td className="px-4 py-3 text-right text-slate-600">{player.minutes}</td>
-                    <td className="px-4 py-3 text-right text-slate-600">{player.goals}</td>
-                    <td className="px-4 py-3 text-right text-slate-600">{player.assists}</td>
-                    <td className="px-4 py-3 text-right text-slate-600">{player.bonus}</td>
-                    <td className="px-4 py-3 text-right text-slate-600">{player.bps}</td>
+                    <td className="px-3 py-2 text-right tabular-nums font-semibold text-emerald-400">
+                      {player.livePoints}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-400">
+                      {player.minutes}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-400">
+                      {player.goals > 0 ? <span className="text-emerald-400">{player.goals}</span> : '-'}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-400">
+                      {player.assists > 0 ? <span className="text-emerald-400">{player.assists}</span> : '-'}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-400">
+                      {player.bonus > 0 ? <span className="text-amber-400">{player.bonus}</span> : '-'}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-500">
+                      {player.bps}
+                    </td>
                   </tr>
                 );
               })}

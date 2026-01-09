@@ -44,110 +44,137 @@ export function FixtureDetails({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-4">
+      {/* Teams header */}
+      <div className="flex items-center gap-3 pb-3 border-b border-slate-700">
         <button
           type="button"
           onClick={() => onEntityClick({ kind: 'team', id: homeTeam.id })}
-          className="flex flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 hover:border-fpl-forest/40"
+          className="flex flex-1 items-center gap-2 bg-slate-800/50 border border-slate-700 rounded p-2 hover:border-emerald-500/40 transition-colors"
         >
-          <TeamBadge badge={homeTeam.badge} name={homeTeam.name} size="lg" />
-          <div>
-            <p className="text-xs text-slate-500">Home</p>
-            <p className="font-semibold text-slate-800">{homeTeam.shortName}</p>
+          <TeamBadge badge={homeTeam.badge} name={homeTeam.name} size="md" />
+          <div className="min-w-0">
+            <p className="text-[10px] text-slate-500">HOME</p>
+            <p className="font-medium text-slate-200 text-sm truncate">{homeTeam.shortName}</p>
           </div>
         </button>
-        <div className="text-center text-sm text-slate-500">vs</div>
+        <span className="text-slate-600 text-xs">vs</span>
         <button
           type="button"
           onClick={() => onEntityClick({ kind: 'team', id: awayTeam.id })}
-          className="flex flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 hover:border-fpl-forest/40"
+          className="flex flex-1 items-center gap-2 bg-slate-800/50 border border-slate-700 rounded p-2 hover:border-emerald-500/40 transition-colors"
         >
-          <TeamBadge badge={awayTeam.badge} name={awayTeam.name} size="lg" />
-          <div>
-            <p className="text-xs text-slate-500">Away</p>
-            <p className="font-semibold text-slate-800">{awayTeam.shortName}</p>
+          <TeamBadge badge={awayTeam.badge} name={awayTeam.name} size="md" />
+          <div className="min-w-0">
+            <p className="text-[10px] text-slate-500">AWAY</p>
+            <p className="font-medium text-slate-200 text-sm truncate">{awayTeam.shortName}</p>
           </div>
         </button>
       </div>
 
-      <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+      {/* Tabs */}
+      <div className="flex border-b border-slate-700">
         {[
           { key: 'overview', label: 'Overview' },
-          { key: 'compare', label: 'Team Compare' },
-          { key: 'players', label: 'Key Players' },
+          { key: 'compare', label: 'Compare' },
+          { key: 'players', label: 'Players' },
         ].map(tab => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key as TabKey)}
-            className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium ${
-              activeTab === tab.key ? 'bg-white text-fpl-forest shadow' : 'text-slate-500 hover:text-slate-700'
+            className={`px-4 py-2 text-sm font-medium transition-colors relative ${
+              activeTab === tab.key ? 'text-emerald-400' : 'text-slate-500 hover:text-slate-300'
             }`}
           >
             {tab.label}
+            {activeTab === tab.key && (
+              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-400" />
+            )}
           </button>
         ))}
       </div>
 
       {activeTab === 'overview' && (
         <div className="space-y-4">
-          <StatsSection title="Fixture Overview">
-            <div className="grid grid-cols-2 gap-3 text-center">
-              <div className="rounded-lg bg-slate-50 p-3">
-                <p className="text-xs text-slate-500">Gameweek</p>
-                <p className="text-lg font-semibold text-slate-800">GW{homeEntry.gameweek}</p>
+          <StatsSection title="Match Info">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-slate-800/50 border border-slate-700 rounded p-2 text-center">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">Gameweek</p>
+                <p className="text-lg font-semibold text-slate-100">GW{homeEntry.gameweek}</p>
               </div>
-              <div className="rounded-lg bg-slate-50 p-3">
-                <p className="text-xs text-slate-500">Difficulty</p>
-                <p className="text-lg font-semibold text-slate-800">{homeEntry.difficulty} / {awayEntry.difficulty}</p>
+              <div className="bg-slate-800/50 border border-slate-700 rounded p-2 text-center">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">FDR</p>
+                <p className="text-lg font-semibold text-slate-100">{homeEntry.difficulty} / {awayEntry.difficulty}</p>
               </div>
             </div>
           </StatsSection>
-          <StatsSection title="Match Outlook">
-            <div className="grid grid-cols-2 gap-3 text-center">
-              <div className="rounded-lg bg-slate-50 p-3">
-                <p className="text-xs text-slate-500">{homeTeam.shortName} xG</p>
-                <p className="text-lg font-semibold text-slate-800">{(insights?.homeXG ?? 0).toFixed(2)}</p>
+
+          <StatsSection title="Expected Goals">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-slate-800/50 border border-slate-700 rounded p-2 text-center">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">{homeTeam.shortName}</p>
+                <p className="text-lg font-semibold text-emerald-400 tabular-nums">{(insights?.homeXG ?? 0).toFixed(2)}</p>
               </div>
-              <div className="rounded-lg bg-slate-50 p-3">
-                <p className="text-xs text-slate-500">{awayTeam.shortName} xG</p>
-                <p className="text-lg font-semibold text-slate-800">{(insights?.awayXG ?? 0).toFixed(2)}</p>
+              <div className="bg-slate-800/50 border border-slate-700 rounded p-2 text-center">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">{awayTeam.shortName}</p>
+                <p className="text-lg font-semibold text-emerald-400 tabular-nums">{(insights?.awayXG ?? 0).toFixed(2)}</p>
               </div>
             </div>
-            {insights?.estimated && <p className="text-xs text-slate-400 mt-2">Estimated from strength + FDR</p>}
           </StatsSection>
-          <StatsSection title="Clean Sheet Outlook">
-            <p className="text-sm text-slate-600">
-              {homeTeam.shortName} CS chance: <span className="font-semibold">{(insights?.homeCS ?? homeEntry.csChance ?? 0).toFixed(0)}%</span>
-            </p>
-            <p className="text-sm text-slate-600 mt-1">
-              {awayTeam.shortName} CS chance: <span className="font-semibold">{(insights?.awayCS ?? awayEntry.csChance ?? 0).toFixed(0)}%</span>
-            </p>
+
+          <StatsSection title="Clean Sheet">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-slate-800/50 border border-slate-700 rounded p-2 text-center">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">{homeTeam.shortName}</p>
+                <p className="text-lg font-semibold text-slate-100 tabular-nums">
+                  {(insights?.homeCS ?? homeEntry.csChance ?? 0).toFixed(0)}%
+                </p>
+              </div>
+              <div className="bg-slate-800/50 border border-slate-700 rounded p-2 text-center">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">{awayTeam.shortName}</p>
+                <p className="text-lg font-semibold text-slate-100 tabular-nums">
+                  {(insights?.awayCS ?? awayEntry.csChance ?? 0).toFixed(0)}%
+                </p>
+              </div>
+            </div>
           </StatsSection>
         </div>
       )}
 
       {activeTab === 'compare' && (
         <div className="space-y-4">
-          <StatsSection title="Team Compare">
-            <div className="grid grid-cols-2 gap-4 text-center">
-              <div>
-                <p className="text-xs uppercase text-slate-400">{homeTeam.shortName}</p>
-                <p className="text-lg font-semibold text-slate-800">{homeTeam.stats?.goalsPerGame?.toFixed(1)} G/G</p>
-                <p className="text-sm text-slate-500">{homeTeam.stats?.concededPerGame?.toFixed(1)} conceded</p>
-                <p className="text-sm text-slate-500">{((homeTeam.stats?.cleanSheetRate ?? 0) * 100).toFixed(0)}% CS</p>
-                <p className="text-xs text-slate-400 mt-1">Attack {insights?.attackIndex.home.toFixed(2) ?? '—'}</p>
-                <p className="text-xs text-slate-400">Defence {insights?.defenceIndex.home.toFixed(2) ?? '—'}</p>
+          <StatsSection title="Team Comparison">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="text-center space-y-2">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">{homeTeam.shortName}</p>
+                <div className="bg-slate-800/50 border border-slate-700 rounded p-2">
+                  <p className="text-lg font-semibold text-slate-100 tabular-nums">{homeTeam.stats?.goalsPerGame?.toFixed(1)}</p>
+                  <p className="text-[10px] text-slate-500">G/Game</p>
+                </div>
+                <div className="bg-slate-800/50 border border-slate-700 rounded p-2">
+                  <p className="text-lg font-semibold text-slate-100 tabular-nums">{homeTeam.stats?.concededPerGame?.toFixed(1)}</p>
+                  <p className="text-[10px] text-slate-500">Conc/G</p>
+                </div>
+                <div className="bg-slate-800/50 border border-slate-700 rounded p-2">
+                  <p className="text-lg font-semibold text-slate-100 tabular-nums">{((homeTeam.stats?.cleanSheetRate ?? 0) * 100).toFixed(0)}%</p>
+                  <p className="text-[10px] text-slate-500">CS Rate</p>
+                </div>
               </div>
-              <div>
-                <p className="text-xs uppercase text-slate-400">{awayTeam.shortName}</p>
-                <p className="text-lg font-semibold text-slate-800">{awayTeam.stats?.goalsPerGame?.toFixed(1)} G/G</p>
-                <p className="text-sm text-slate-500">{awayTeam.stats?.concededPerGame?.toFixed(1)} conceded</p>
-                <p className="text-sm text-slate-500">{((awayTeam.stats?.cleanSheetRate ?? 0) * 100).toFixed(0)}% CS</p>
-                <p className="text-xs text-slate-400 mt-1">Attack {insights?.attackIndex.away.toFixed(2) ?? '—'}</p>
-                <p className="text-xs text-slate-400">Defence {insights?.defenceIndex.away.toFixed(2) ?? '—'}</p>
+              <div className="text-center space-y-2">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">{awayTeam.shortName}</p>
+                <div className="bg-slate-800/50 border border-slate-700 rounded p-2">
+                  <p className="text-lg font-semibold text-slate-100 tabular-nums">{awayTeam.stats?.goalsPerGame?.toFixed(1)}</p>
+                  <p className="text-[10px] text-slate-500">G/Game</p>
+                </div>
+                <div className="bg-slate-800/50 border border-slate-700 rounded p-2">
+                  <p className="text-lg font-semibold text-slate-100 tabular-nums">{awayTeam.stats?.concededPerGame?.toFixed(1)}</p>
+                  <p className="text-[10px] text-slate-500">Conc/G</p>
+                </div>
+                <div className="bg-slate-800/50 border border-slate-700 rounded p-2">
+                  <p className="text-lg font-semibold text-slate-100 tabular-nums">{((awayTeam.stats?.cleanSheetRate ?? 0) * 100).toFixed(0)}%</p>
+                  <p className="text-[10px] text-slate-500">CS Rate</p>
+                </div>
               </div>
             </div>
-            <p className="text-xs text-slate-500 mt-3">Attack/defence indices are normalized vs league average.</p>
           </StatsSection>
         </div>
       )}
@@ -155,55 +182,55 @@ export function FixtureDetails({
       {activeTab === 'players' && (
         <div className="space-y-4">
           <StatsSection title={`${homeTeam.shortName} Key Players`}>
-            <div className="space-y-2">
+            <div className="space-y-1">
               {(insights?.homeKeyPlayers ?? homeTeam.topPlayers?.starPlayers ?? []).map(player => (
                 <button
                   key={player.id}
                   type="button"
                   onClick={() => onEntityClick({ kind: 'player', id: player.id })}
-                  className="flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left hover:border-fpl-forest/40"
+                  className="flex w-full items-center gap-2 bg-slate-800/50 border border-slate-700 rounded px-3 py-2 text-left hover:border-emerald-500/40 transition-colors"
                 >
                   <PlayerPhoto photoCode={player.photoCode} name={player.name} size="sm" />
-                  <div className="flex-1">
-                    <p className="text-sm font-semibold text-slate-800">{player.name}</p>
-                    <p className="text-xs text-slate-500">{player.position}</p>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-200 truncate">{player.name}</p>
+                    <p className="text-[10px] text-slate-500">{player.position}</p>
                   </div>
                   {'xPts' in player ? (
-                    <span className="text-xs text-slate-500">{player.xPts.toFixed(1)} xPts</span>
+                    <span className="text-xs text-emerald-400 font-medium tabular-nums">{player.xPts.toFixed(1)}</span>
                   ) : (
-                    <span className="text-xs text-slate-500">{player.points} pts</span>
+                    <span className="text-xs text-slate-400 tabular-nums">{player.points}pts</span>
                   )}
                 </button>
               ))}
               {(insights?.homeKeyPlayers ?? homeTeam.topPlayers?.starPlayers ?? []).length === 0 && (
-                <p className="text-sm text-slate-500">Coming soon</p>
+                <p className="text-sm text-slate-500">No data</p>
               )}
             </div>
           </StatsSection>
 
           <StatsSection title={`${awayTeam.shortName} Key Players`}>
-            <div className="space-y-2">
+            <div className="space-y-1">
               {(insights?.awayKeyPlayers ?? awayTeam.topPlayers?.starPlayers ?? []).map(player => (
                 <button
                   key={player.id}
                   type="button"
                   onClick={() => onEntityClick({ kind: 'player', id: player.id })}
-                  className="flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left hover:border-fpl-forest/40"
+                  className="flex w-full items-center gap-2 bg-slate-800/50 border border-slate-700 rounded px-3 py-2 text-left hover:border-emerald-500/40 transition-colors"
                 >
                   <PlayerPhoto photoCode={player.photoCode} name={player.name} size="sm" />
-                  <div className="flex-1">
-                    <p className="text-sm font-semibold text-slate-800">{player.name}</p>
-                    <p className="text-xs text-slate-500">{player.position}</p>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-200 truncate">{player.name}</p>
+                    <p className="text-[10px] text-slate-500">{player.position}</p>
                   </div>
                   {'xPts' in player ? (
-                    <span className="text-xs text-slate-500">{player.xPts.toFixed(1)} xPts</span>
+                    <span className="text-xs text-emerald-400 font-medium tabular-nums">{player.xPts.toFixed(1)}</span>
                   ) : (
-                    <span className="text-xs text-slate-500">{player.points} pts</span>
+                    <span className="text-xs text-slate-400 tabular-nums">{player.points}pts</span>
                   )}
                 </button>
               ))}
               {(insights?.awayKeyPlayers ?? awayTeam.topPlayers?.starPlayers ?? []).length === 0 && (
-                <p className="text-sm text-slate-500">Coming soon</p>
+                <p className="text-sm text-slate-500">No data</p>
               )}
             </div>
           </StatsSection>

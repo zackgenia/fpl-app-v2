@@ -7,6 +7,7 @@ const { loadFbrefSnapshot } = require('./lib/snapshots/fbref');
 const { loadFootballDataSnapshot, matchFootballDataTeam } = require('./lib/snapshots/footballData');
 const { matchUnderstatPlayer, matchUnderstatTeam } = require('./lib/mappings/understat');
 const { createMockOddsProvider } = require('./lib/odds/mockProvider');
+const { buildTeamStrength, projectPlayer, projectTeam, projectFixture } = require('../shared/insights');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -337,22 +338,64 @@ async function calculatePrediction(player, horizon = 5) {
   const position = POSITION_MAP[player.element_type];
   const pts = POINTS_SYSTEM[position];
 
-  // Minutes calculation
-  const recentHistory = history.slice(-5);
-  const avgMinutes = recentHistory.length > 0
-    ? recentHistory.reduce((s, h) => s + h.minutes, 0) / recentHistory.length
-    : 45;
-  const availability = player.chance_of_playing_next_round ?? 100;
-  const minutesProb = Math.min(avgMinutes / 90, 1) * (availability / 100);
+  // ============================================
+  // IMPROVED: Detect returning players from injury
+  // ============================================
+  const sortedHistory = [...history].sort((a, b) => (b.round ?? 0) - (a.round ?? 0));
+  const last5 = sortedHistory.slice(0, 5);
+  const gamesWithMinutes = last5.filter(h => (h.minutes ?? 0) > 0);
+  const gamesWithZero = last5.filter(h => (h.minutes ?? 0) === 0);
 
-  // Base form score
-  const baseScore = recentHistory.length > 0
-    ? recentHistory.reduce((s, h) => s + h.total_points, 0) / recentHistory.length
+  // Player is returning if: had 2+ zeros recently but also played 60+ mins in at least one recent game
+  const isReturning = gamesWithZero.length >= 2 && gamesWithMinutes.length >= 1 &&
+                      gamesWithMinutes.some(h => (h.minutes ?? 0) >= 60);
+
+  // ============================================
+  // IMPROVED: Elite player detection
+  // High PPG or high total points = elite (e.g., Gabriel, Salah)
+  // ============================================
+  const gamesPlayed = history.filter(h => (h.minutes ?? 0) >= 45).length;
+  const ppg = gamesPlayed > 0 ? player.total_points / gamesPlayed : 0;
+  const eliteThreshold = player.element_type === 1 ? 4.5 : player.element_type === 2 ? 4.5 : player.element_type === 3 ? 5.0 : 4.8;
+  const isElite = ppg >= eliteThreshold || player.total_points >= 100;
+
+  // ============================================
+  // IMPROVED: Minutes calculation - skip injury blanks
+  // For returning/elite players, only use games where they played 45+ mins
+  // ============================================
+  let relevantHistory;
+  if (isReturning || isElite) {
+    // Use games where player had significant minutes (45+), last 8 such games
+    relevantHistory = sortedHistory.filter(h => (h.minutes ?? 0) >= 45).slice(0, 8);
+  } else {
+    // Normal: last 5 games
+    relevantHistory = sortedHistory.slice(0, 5);
+  }
+
+  const avgMinutes = relevantHistory.length > 0
+    ? relevantHistory.reduce((s, h) => s + h.minutes, 0) / relevantHistory.length
+    : 45;
+
+  const availability = player.chance_of_playing_next_round ?? 100;
+  // Softer availability penalty (square root)
+  const availabilityFactor = Math.pow(availability / 100, 0.5);
+  // Returning player boost
+  const returningBoost = isReturning ? 1.15 : 1.0;
+  const minutesProb = Math.min((avgMinutes / 90) * availabilityFactor * returningBoost, 1);
+
+  // ============================================
+  // IMPROVED: Form score - exclude injury blanks
+  // ============================================
+  const baseScore = relevantHistory.length > 0
+    ? relevantHistory.reduce((s, h) => s + h.total_points, 0) / relevantHistory.length
     : 2;
 
-  // Form trend
-  const formTrend = calculateFormTrend(history);
-  const formMult = formTrend === 'rising' ? 1.08 : formTrend === 'falling' ? 0.92 : 1.0;
+  // Form trend (use games with minutes only)
+  const formTrend = calculateFormTrend(history.filter(h => (h.minutes ?? 0) > 0));
+  // Elite players get wider form range
+  const formMult = isElite
+    ? (formTrend === 'rising' ? 1.12 : formTrend === 'falling' ? 0.92 : 1.0)
+    : (formTrend === 'rising' ? 1.08 : formTrend === 'falling' ? 0.92 : 1.0);
 
   // Team momentum
   const momentum = teamMomentum.get(player.team) ?? 0.5;
@@ -918,6 +961,247 @@ app.get('/api/player/:id', async (req, res) => {
   } catch (error) {
     console.error('Player error:', error);
     res.status(500).json({ error: 'Failed to fetch player' });
+  }
+});
+
+// ===================
+// INSIGHTS ENDPOINTS
+// ===================
+
+// Player insights - uses the SAME calculatePrediction as recommendations (with injury return improvements)
+app.get('/api/insights/player/:id', async (req, res) => {
+  try {
+    const playerId = parseInt(req.params.id);
+    const horizon = parseInt(req.query.horizon) || 5;
+
+    const bootstrap = await getBootstrapRaw();
+    const player = bootstrap.elements.find(p => p.id === playerId);
+    if (!player) return res.status(404).json({ error: 'Player not found' });
+
+    await loadData();
+
+    // Use the SAME calculatePrediction function as recommendations
+    // This has all the injury return and elite player improvements
+    const prediction = await calculatePrediction(player, horizon);
+
+    // Calculate breakdown from fixtureDetails
+    const fixtureDetails = prediction.fixtureDetails || [];
+    const firstFixture = fixtureDetails[0] || {};
+
+    // Estimate breakdown components from the prediction data
+    const minutesProb = prediction.minutesPct / 100;
+    const position = prediction.position;
+    const pts = POINTS_SYSTEM[position] || POINTS_SYSTEM.MID;
+
+    // Appearance points estimate
+    const appearancePoints = minutesProb > 0.66 ? 2 * minutesProb : 1 * minutesProb;
+
+    // Goal/assist estimates from fixture details
+    const goalChance = (firstFixture.goalChance || 0) / 100;
+    const assistChance = (firstFixture.assistChance || 0) / 100;
+    const csChance = (firstFixture.csChance || 0) / 100;
+
+    const goalPoints = goalChance * pts.goal * minutesProb;
+    const assistPoints = assistChance * pts.assist * minutesProb;
+    const cleanSheetPoints = csChance * pts.cleanSheet * minutesProb;
+
+    // Bonus estimate from history
+    const bonusPoints = (prediction.form || 2) * 0.15 * minutesProb;
+
+    // Build response in the format the frontend expects
+    const response = {
+      playerId: prediction.playerId,
+      position: prediction.position,
+      teamId: prediction.teamId,
+      xPts: {
+        nextFixture: fixtureDetails[0]?.expectedPoints ?? prediction.predictedPointsPerGW,
+        next3: fixtureDetails.slice(0, 3).reduce((sum, f) => sum + f.expectedPoints, 0) || prediction.predictedPointsN * 0.6,
+        next5: prediction.predictedPointsN,
+        low: prediction.predictedPointsN * 0.7,
+        high: prediction.predictedPointsN * 1.3,
+      },
+      breakdown: {
+        appearance: Math.round(appearancePoints * 100) / 100,
+        goals: Math.round(goalPoints * 100) / 100,
+        assists: Math.round(assistPoints * 100) / 100,
+        cleanSheet: Math.round(cleanSheetPoints * 100) / 100,
+        bonus: Math.round(bonusPoints * 100) / 100,
+      },
+      fixtures: fixtureDetails.map(f => ({
+        fixtureId: f.gameweek,
+        gameweek: f.gameweek,
+        opponent: f.opponent,
+        opponentId: f.opponentId,
+        opponentBadge: f.opponentBadge,
+        isHome: f.isHome,
+        difficulty: f.difficulty,
+        expectedPoints: f.expectedPoints,
+      })),
+      advanced: {
+        xG: prediction.expectedGoals || 0,
+        xA: prediction.expectedAssists || 0,
+        xGI: prediction.expectedGoalInvolvements || 0,
+        xGI90: player.minutes > 0 ? ((prediction.expectedGoalInvolvements || 0) / player.minutes) * 90 : 0,
+        shots: null,
+        bigChances: null,
+      },
+      estimated: true,
+      seasonBaseline: {
+        ppg: player.total_points / Math.max(bootstrap.elements.filter(p => p.id === playerId)[0]?.minutes / 90 || 1, 1),
+        pp90: player.minutes > 0 ? (player.total_points / player.minutes) * 90 : 0,
+        gamesPlayed: Math.floor(player.minutes / 60),
+        isElite: prediction.totalPoints >= 100,
+      },
+      isReturning: false,
+      isElite: prediction.totalPoints >= 100,
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error('Player insights error:', error);
+    res.status(500).json({ error: 'Failed to fetch player insights' });
+  }
+});
+
+// Team insights
+app.get('/api/insights/team/:id', async (req, res) => {
+  try {
+    const teamId = parseInt(req.params.id);
+    const horizon = parseInt(req.query.horizon) || 5;
+
+    await loadData();
+    const team = teamsById.get(teamId);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+
+    const fixturesData = await getFixturesRaw();
+    const bootstrap = await getBootstrapRaw();
+    const currentGW = bootstrap.events.find(gw => gw.is_current)?.id ?? 1;
+
+    // Build team strength map
+    const teams = Array.from(teamsById.values());
+    const { strengthMap, avgGoalsPerGame } = buildTeamStrength({
+      teams,
+      teamStats,
+      understatTeams: null,
+    });
+
+    // Get upcoming fixtures for this team
+    const teamFixtures = fixturesData
+      .filter(f => (f.team_h === teamId || f.team_a === teamId) && f.event >= currentGW && f.event < currentGW + horizon)
+      .sort((a, b) => a.event - b.event)
+      .map(f => {
+        const isHome = f.team_h === teamId;
+        const oppId = isHome ? f.team_a : f.team_h;
+        const opp = teamsById.get(oppId);
+        return {
+          fixtureId: f.id,
+          gameweek: f.event,
+          opponent: opp?.short_name ?? 'UNK',
+          opponentId: oppId,
+          isHome,
+          difficulty: isHome ? f.team_h_difficulty : f.team_a_difficulty,
+        };
+      });
+
+    const projection = projectTeam({
+      teamId,
+      fixtures: teamFixtures,
+      strengthMap,
+      avgGoalsPerGame,
+      oddsMap: null,
+    });
+
+    res.json({
+      ...projection,
+      teamName: team.name,
+      teamShortName: team.short_name,
+      teamBadge: getTeamBadgeUrl(team),
+    });
+  } catch (error) {
+    console.error('Team insights error:', error);
+    res.status(500).json({ error: 'Failed to fetch team insights' });
+  }
+});
+
+// Fixture insights
+app.get('/api/insights/fixture/:id', async (req, res) => {
+  try {
+    const fixtureId = parseInt(req.params.id);
+    const horizon = parseInt(req.query.horizon) || 5;
+
+    await loadData();
+    const fixturesData = await getFixturesRaw();
+    const fixture = fixturesData.find(f => f.id === fixtureId);
+    if (!fixture) return res.status(404).json({ error: 'Fixture not found' });
+
+    const homeTeam = teamsById.get(fixture.team_h);
+    const awayTeam = teamsById.get(fixture.team_a);
+
+    // Build team strength map
+    const teams = Array.from(teamsById.values());
+    const { strengthMap, avgGoalsPerGame } = buildTeamStrength({
+      teams,
+      teamStats,
+      understatTeams: null,
+    });
+
+    const projection = projectFixture({
+      fixture: {
+        id: fixture.id,
+        homeTeamId: fixture.team_h,
+        awayTeamId: fixture.team_a,
+      },
+      teams: teamsById,
+      strengthMap,
+      avgGoalsPerGame,
+      oddsMap: null,
+    });
+
+    // Get key players for this fixture
+    const bootstrap = await getBootstrapRaw();
+    const homePlayers = bootstrap.elements
+      .filter(p => p.team === fixture.team_h && p.minutes > 200)
+      .sort((a, b) => b.total_points - a.total_points)
+      .slice(0, 5);
+    const awayPlayers = bootstrap.elements
+      .filter(p => p.team === fixture.team_a && p.minutes > 200)
+      .sort((a, b) => b.total_points - a.total_points)
+      .slice(0, 5);
+
+    res.json({
+      ...projection,
+      gameweek: fixture.event,
+      kickoff: fixture.kickoff_time,
+      homeTeam: {
+        id: fixture.team_h,
+        name: homeTeam?.name ?? 'Unknown',
+        shortName: homeTeam?.short_name ?? 'UNK',
+        badge: getTeamBadgeUrl(homeTeam),
+        keyPlayers: homePlayers.map(p => ({
+          id: p.id,
+          name: p.web_name,
+          position: POSITION_MAP[p.element_type],
+          points: p.total_points,
+          form: parseFloat(p.form || 0),
+        })),
+      },
+      awayTeam: {
+        id: fixture.team_a,
+        name: awayTeam?.name ?? 'Unknown',
+        shortName: awayTeam?.short_name ?? 'UNK',
+        badge: getTeamBadgeUrl(awayTeam),
+        keyPlayers: awayPlayers.map(p => ({
+          id: p.id,
+          name: p.web_name,
+          position: POSITION_MAP[p.element_type],
+          points: p.total_points,
+          form: parseFloat(p.form || 0),
+        })),
+      },
+    });
+  } catch (error) {
+    console.error('Fixture insights error:', error);
+    res.status(500).json({ error: 'Failed to fetch fixture insights' });
   }
 });
 
