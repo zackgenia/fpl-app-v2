@@ -150,11 +150,11 @@ export function TransferCard({ transfer, rank, squadBaseline, onPlayerClick, exp
       <div className="mt-3 grid grid-cols-2 gap-4">
         <div>
           <p className="text-xs text-slate-500 mb-1">Current player confidence</p>
-          <ConfidenceBar confidence={playerOut.confidence} />
+          <ConfidenceBar confidence={playerOut.confidence} showTooltip />
         </div>
         <div>
           <p className="text-xs text-slate-500 mb-1">New player confidence</p>
-          <ConfidenceBar confidence={playerIn.confidence} />
+          <ConfidenceBar confidence={playerIn.confidence} showTooltip />
         </div>
       </div>
     </div>

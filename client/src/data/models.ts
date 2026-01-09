@@ -17,6 +17,16 @@ export type PlayerAdvancedMetrics = {
   bigChances: number | null;
   teamXG: number | null;
   oppXGA: number | null;
+  // Football-Data.org fields
+  goals?: number | null;
+  assists?: number | null;
+  penalties?: number | null;
+  playedMatches?: number | null;
+  rating?: number | null;
+  leaguePosition?: number | null;
+  teamPoints?: number | null;
+  teamGoalsFor?: number | null;
+  teamGoalsAgainst?: number | null;
 };
 
 export type PlayerDerivedMetrics = {

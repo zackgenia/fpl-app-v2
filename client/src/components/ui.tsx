@@ -87,12 +87,17 @@ export function ErrorMessage({ message, onRetry }: { message: string; onRetry?: 
 }
 
 // Confidence bar
-export function ConfidenceBar({ confidence, showLabel = true }: { confidence: number; showLabel?: boolean }) {
+export function ConfidenceBar({ confidence, showLabel = true, showTooltip = false }: { confidence: number; showLabel?: boolean; showTooltip?: boolean }) {
   const level = confidence >= 80 ? 'high' : confidence >= 60 ? 'medium' : 'low';
   const label = confidence >= 80 ? 'High confidence' : confidence >= 60 ? 'Medium' : 'Higher risk';
-  
+  const description = confidence >= 80
+    ? 'Strong data quality: consistent minutes, stable form, favorable fixtures'
+    : confidence >= 60
+    ? 'Moderate certainty: some variability in minutes or form'
+    : 'Higher uncertainty: rotation risk, injury concerns, or tough fixtures';
+
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 group relative">
       {showLabel && (
         <div className="flex justify-between text-xs">
           <span className={`font-medium ${level === 'high' ? 'text-emerald-600' : level === 'medium' ? 'text-amber-600' : 'text-red-600'}`}>
@@ -104,6 +109,9 @@ export function ConfidenceBar({ confidence, showLabel = true }: { confidence: nu
       <div className="confidence-bar">
         <div className={`confidence-fill confidence-${level}`} style={{ width: `${confidence}%` }} />
       </div>
+      {showTooltip && (
+        <p className="text-[10px] text-slate-400 mt-1">{description}</p>
+      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ const path = require('path');
 const { Cache } = require('./lib/cache');
 const { loadUnderstatSnapshot } = require('./lib/snapshots/understat');
 const { loadFbrefSnapshot } = require('./lib/snapshots/fbref');
+const { loadFootballDataSnapshot, matchFootballDataTeam } = require('./lib/snapshots/footballData');
 const { matchUnderstatPlayer, matchUnderstatTeam } = require('./lib/mappings/understat');
 const { createMockOddsProvider } = require('./lib/odds/mockProvider');
 
@@ -16,6 +17,7 @@ app.use(express.json());
 const ENABLE_UNDERSTAT = process.env.ENABLE_UNDERSTAT === 'true';
 const ENABLE_FBREF = process.env.ENABLE_FBREF === 'true';
 const ENABLE_ODDS = process.env.ENABLE_ODDS === 'true';
+const ENABLE_FOOTBALL_DATA = process.env.ENABLE_FOOTBALL_DATA === 'true';
 
 // ===================
 // CACHE SYSTEM
@@ -83,6 +85,7 @@ let fixturesData = [];
 let teamMomentum = new Map();
 let teamStats = new Map();
 let teamStrength = new Map();
+let footballDataSnapshot = null;
 
 // Get badge URL using team.code (not team.id)
 function getTeamBadgeUrl(team) {
@@ -91,11 +94,14 @@ function getTeamBadgeUrl(team) {
 }
 
 async function loadData() {
-  const cacheKey = 'loaded_data_v3';
+  const cacheKey = 'loaded_data_v4';
   if (longCache.get(cacheKey)) return;
 
   const bootstrap = await getBootstrapRaw();
   const fixtures = await getFixturesRaw();
+
+  // Load Football-Data snapshot for accurate season stats
+  footballDataSnapshot = loadFootballDataSnapshot();
 
   // Map teams by both ID and code
   teamsById = new Map(bootstrap.teams.map(t => [t.id, t]));
@@ -148,24 +154,48 @@ async function loadData() {
     });
     teamMomentum.set(team.id, last5.length > 0 ? momentum / 45 : 0.5);
 
-    // Detailed stats from last 10 games
+    // Detailed stats from last 10 games (for form/recent trends)
     const homeGames = last10.filter(r => r.isHome);
     const awayGames = last10.filter(r => !r.isHome);
 
-    const totalScored = last10.reduce((s, r) => s + r.scored, 0);
-    const totalConceded = last10.reduce((s, r) => s + r.conceded, 0);
     const cleanSheets = last10.filter(r => r.conceded === 0).length;
     const homeCleanSheets = homeGames.filter(r => r.conceded === 0).length;
     const awayCleanSheets = awayGames.filter(r => r.conceded === 0).length;
 
+    // Try to get accurate season stats from Football-Data.org
+    const fdTeam = footballDataSnapshot?.standings
+      ? matchFootballDataTeam(team, footballDataSnapshot.standings)
+      : null;
+
+    // Use Football-Data.org for accurate season-wide per-game stats, fallback to FPL data
+    let goalsPerGame, concededPerGame, played;
+    if (fdTeam && fdTeam.playedGames > 0) {
+      played = fdTeam.playedGames;
+      goalsPerGame = fdTeam.goalsFor / fdTeam.playedGames;
+      concededPerGame = fdTeam.goalsAgainst / fdTeam.playedGames;
+    } else {
+      // Fallback to FPL last 10 games
+      played = last10.length;
+      const totalScored = last10.reduce((s, r) => s + r.scored, 0);
+      const totalConceded = last10.reduce((s, r) => s + r.conceded, 0);
+      goalsPerGame = last10.length > 0 ? totalScored / last10.length : 0;
+      concededPerGame = last10.length > 0 ? totalConceded / last10.length : 0;
+    }
+
     teamStats.set(team.id, {
-      played: last10.length,
+      played,
       cleanSheets,
       cleanSheetRate: last10.length > 0 ? cleanSheets / last10.length : 0,
       homeCleanSheetRate: homeGames.length > 0 ? homeCleanSheets / homeGames.length : 0,
       awayCleanSheetRate: awayGames.length > 0 ? awayCleanSheets / awayGames.length : 0,
-      goalsPerGame: last10.length > 0 ? totalScored / last10.length : 0,
-      concededPerGame: last10.length > 0 ? totalConceded / last10.length : 0,
+      goalsPerGame,
+      concededPerGame,
+      // Season totals from Football-Data (if available)
+      seasonGoalsFor: fdTeam?.goalsFor ?? null,
+      seasonGoalsAgainst: fdTeam?.goalsAgainst ?? null,
+      seasonPlayed: fdTeam?.playedGames ?? null,
+      leaguePosition: fdTeam?.position ?? null,
+      // Home/away splits from FPL recent games
       homeGoalsPerGame: homeGames.length > 0 ? homeGames.reduce((s, r) => s + r.scored, 0) / homeGames.length : 0,
       awayGoalsPerGame: awayGames.length > 0 ? awayGames.reduce((s, r) => s + r.scored, 0) / awayGames.length : 0,
       homeConcededPerGame: homeGames.length > 0 ? homeGames.reduce((s, r) => s + r.conceded, 0) / homeGames.length : 0,

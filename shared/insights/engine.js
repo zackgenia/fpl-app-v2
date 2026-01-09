@@ -1,13 +1,13 @@
 const POSITION_POINTS = {
-  GK: { goal: 6, assist: 3, cleanSheet: 4 },
-  DEF: { goal: 6, assist: 3, cleanSheet: 4 },
-  MID: { goal: 5, assist: 3, cleanSheet: 1 },
-  FWD: { goal: 4, assist: 3, cleanSheet: 0 },
+  GK: { goal: 6, assist: 3, cleanSheet: 4, appearance60: 2, appearance1: 1 },
+  DEF: { goal: 6, assist: 3, cleanSheet: 4, appearance60: 2, appearance1: 1 },
+  MID: { goal: 5, assist: 3, cleanSheet: 1, appearance60: 2, appearance1: 1 },
+  FWD: { goal: 4, assist: 3, cleanSheet: 0, appearance60: 2, appearance1: 1 },
 };
 
 const FIXTURE_WEIGHTS = [1, 0.95, 0.9, 0.85, 0.8];
-const HOME_ADVANTAGE = 1.08;
-const AWAY_PENALTY = 0.92;
+const HOME_ADVANTAGE = 1.12;
+const AWAY_PENALTY = 0.88;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -112,38 +112,167 @@ function projectFixture({ fixture, teams, strengthMap, avgGoalsPerGame, oddsMap 
   };
 }
 
-function calculateExpectedMinutes(history, availability) {
-  const recentHistory = history?.slice(-5) ?? [];
-  const avgMinutes = recentHistory.length > 0
-    ? recentHistory.reduce((sum, h) => sum + (h.minutes ?? 0), 0) / recentHistory.length
-    : 75;
+// ============================================
+// IMPROVED: Smart minutes calculation
+// Handles returning players and injury gaps
+// ============================================
+function calculateExpectedMinutes(history, availability, player) {
+  if (!history || history.length === 0) {
+    // New player or no data - use reasonable default based on availability
+    const base = availability >= 75 ? 70 : availability >= 50 ? 45 : 20;
+    return { expectedMinutes: base, roleFactor: 0.85, avgMinutes: base, isReturning: false };
+  }
 
+  // Sort history by round (most recent first)
+  const sortedHistory = [...history].sort((a, b) => (b.round ?? 0) - (a.round ?? 0));
+
+  // Detect returning player: recent games with 0 mins followed by games with minutes
+  const recentGames = sortedHistory.slice(0, 5);
+  const gamesWithMinutes = recentGames.filter(h => (h.minutes ?? 0) > 0);
+  const gamesWithZero = recentGames.filter(h => (h.minutes ?? 0) === 0);
+
+  // Check if player is returning from absence
+  const isReturning = gamesWithZero.length >= 2 && gamesWithMinutes.length >= 1 &&
+                      gamesWithMinutes.some(h => (h.minutes ?? 0) >= 60);
+
+  // For returning players, look at their performance BEFORE the absence
+  let relevantHistory;
+  if (isReturning) {
+    // Find games where they played significant minutes
+    const fittGames = sortedHistory.filter(h => (h.minutes ?? 0) >= 45);
+    relevantHistory = fittGames.slice(0, 10); // Use last 10 games where they were fit
+  } else {
+    // Normal calculation - last 8 games with diminishing weight
+    relevantHistory = sortedHistory.slice(0, 8);
+  }
+
+  if (relevantHistory.length === 0) {
+    return { expectedMinutes: 60, roleFactor: 0.85, avgMinutes: 60, isReturning };
+  }
+
+  // Weighted average - more recent games get slightly more weight
+  let totalWeight = 0;
+  let weightedMinutes = 0;
+  relevantHistory.forEach((h, idx) => {
+    const weight = 1 - (idx * 0.05); // 1.0, 0.95, 0.90, etc.
+    weightedMinutes += (h.minutes ?? 0) * weight;
+    totalWeight += weight;
+  });
+
+  const avgMinutes = totalWeight > 0 ? weightedMinutes / totalWeight : 60;
+
+  // Role factor based on typical minutes
   let roleFactor = 0.9;
-  if (avgMinutes >= 80) roleFactor = 1.0;
+  if (avgMinutes >= 85) roleFactor = 1.0;
+  else if (avgMinutes >= 75) roleFactor = 0.95;
   else if (avgMinutes >= 60) roleFactor = 0.9;
-  else roleFactor = 0.8;
+  else if (avgMinutes >= 45) roleFactor = 0.8;
+  else roleFactor = 0.7;
 
-  const availabilityFactor = availability !== null && availability !== undefined ? availability / 100 : 0.9;
-  const expectedMinutes = clamp(avgMinutes * roleFactor * availabilityFactor, 0, 90);
+  // Availability adjustment
+  const availabilityFactor = availability !== null && availability !== undefined
+    ? Math.pow(availability / 100, 0.5)  // Square root - less harsh penalty
+    : 0.95;
 
-  return { expectedMinutes, roleFactor, avgMinutes };
+  // For returning players, be more optimistic about minutes
+  const returningBoost = isReturning ? 1.1 : 1.0;
+
+  const expectedMinutes = clamp(avgMinutes * roleFactor * availabilityFactor * returningBoost, 0, 90);
+
+  return { expectedMinutes, roleFactor, avgMinutes, isReturning };
 }
 
+// ============================================
+// IMPROVED: Season baseline calculation
+// Uses points per game as anchor with form modifier
+// ============================================
+function calculateSeasonBaseline(player, history) {
+  const totalPoints = player.total_points ?? player.totalPoints ?? 0;
+  const totalMinutes = player.minutes ?? 0;
+
+  // Points per 90 minutes (season average)
+  const pp90 = totalMinutes > 0 ? (totalPoints / totalMinutes) * 90 : 0;
+
+  // Points per game (for players who get rotated)
+  const gamesPlayed = history?.filter(h => (h.minutes ?? 0) > 0).length || 0;
+  const ppg = gamesPlayed > 0 ? totalPoints / gamesPlayed : 0;
+
+  // Recent form (last 5 games where they played)
+  const recentGames = (history || [])
+    .filter(h => (h.minutes ?? 0) > 0)
+    .sort((a, b) => (b.round ?? 0) - (a.round ?? 0))
+    .slice(0, 5);
+
+  const recentPP90 = recentGames.length > 0
+    ? recentGames.reduce((sum, h) => sum + (h.total_points ?? 0), 0) /
+      Math.max(recentGames.reduce((sum, h) => sum + (h.minutes ?? 0), 0) / 90, 0.5)
+    : pp90;
+
+  // Form trend: compare recent to season average
+  const formRatio = pp90 > 0 ? recentPP90 / pp90 : 1;
+  const formMultiplier = clamp(0.85 + (formRatio - 1) * 0.15, 0.85, 1.2);
+
+  return {
+    pp90,
+    ppg,
+    recentPP90,
+    formMultiplier,
+    gamesPlayed,
+    totalMinutes,
+    totalPoints,
+  };
+}
+
+// ============================================
+// IMPROVED: Historical H2H performance
+// ============================================
+function getHistoricalPerformanceVsOpponent(history, opponentId) {
+  if (!history || history.length === 0) return null;
+
+  // Find games against this opponent
+  const vsOpponent = history.filter(h => h.opponent_team === opponentId);
+
+  if (vsOpponent.length === 0) return null;
+
+  const totalPoints = vsOpponent.reduce((sum, h) => sum + (h.total_points ?? 0), 0);
+  const totalMinutes = vsOpponent.reduce((sum, h) => sum + (h.minutes ?? 0), 0);
+  const gamesPlayed = vsOpponent.filter(h => (h.minutes ?? 0) > 0).length;
+
+  if (gamesPlayed === 0) return null;
+
+  return {
+    avgPoints: totalPoints / gamesPlayed,
+    pp90: totalMinutes > 0 ? (totalPoints / totalMinutes) * 90 : 0,
+    gamesPlayed,
+    totalMinutes,
+    // Boost factor based on historical performance
+    h2hMultiplier: gamesPlayed >= 2 ? 1.0 : 0.5, // Weight H2H data by sample size
+  };
+}
+
+// ============================================
+// IMPROVED: Attacking outputs with season context
+// ============================================
 function computeAttackingOutputs({
   player,
   expectedMinutes,
   opponentDefenceIndex,
   fixtureDifficulty,
   understatPlayer,
+  seasonBaseline,
+  h2hData,
+  isHome,
 }) {
-  const opponentAdjustment = clamp(1 / (opponentDefenceIndex || 1), 0.7, 1.3);
+  const opponentAdjustment = clamp(1 / (opponentDefenceIndex || 1), 0.75, 1.35);
   const minutesFactor = expectedMinutes / 90;
+  const homeAwayMod = isHome ? 1.08 : 0.92;
 
   let xGI90 = 0;
   let xG = 0;
   let xA = 0;
   let isEstimated = false;
 
+  // Priority: Understat > FPL expected stats > ICT fallback
   if (understatPlayer && understatPlayer.minutes > 0) {
     xG = understatPlayer.xG;
     xA = understatPlayer.xA;
@@ -154,16 +283,29 @@ function computeAttackingOutputs({
     xGI90 = ((xG + xA) / player.minutes) * 90;
     isEstimated = true;
   } else {
+    // Fallback: derive from ICT and form
     const ict = parseFloat(player.ict_index || 0);
     const form = parseFloat(player.form || 0);
-    const base = clamp((ict + form * 2) / 15, 0.1, 1.2);
+    const base = clamp((ict + form * 2) / 12, 0.1, 1.5);
     xGI90 = base;
     isEstimated = true;
   }
 
-  const difficultyMultiplier = clamp(1.15 - (fixtureDifficulty - 1) * 0.08, 0.8, 1.2);
-  const expectedGI = xGI90 * minutesFactor * opponentAdjustment * difficultyMultiplier;
-  const xGShare = xG + xA > 0 ? xG / (xG + xA) : 0.6;
+  // Fixture difficulty multiplier (position-aware)
+  const position = player.position ?? player.element_type;
+  const positionFactor = position === 4 ? 1.0 : position === 3 ? 0.9 : 0.8;
+  const difficultyMultiplier = clamp(1.2 - (fixtureDifficulty - 1) * 0.1 * positionFactor, 0.75, 1.25);
+
+  // Historical H2H boost (capped)
+  const h2hBoost = h2hData?.h2hMultiplier
+    ? clamp(1 + (h2hData.pp90 / Math.max(seasonBaseline?.pp90 || 4, 4) - 1) * 0.15 * h2hData.h2hMultiplier, 0.9, 1.15)
+    : 1.0;
+
+  // Form multiplier from season baseline
+  const formMult = seasonBaseline?.formMultiplier ?? 1.0;
+
+  const expectedGI = xGI90 * minutesFactor * opponentAdjustment * difficultyMultiplier * homeAwayMod * h2hBoost * formMult;
+  const xGShare = xG + xA > 0 ? xG / (xG + xA) : 0.55;
 
   return {
     expectedGI,
@@ -173,17 +315,52 @@ function computeAttackingOutputs({
     xA,
     xGI90,
     isEstimated,
+    h2hBoost,
+    formMult,
   };
 }
 
-function mapExpectedPoints({ position, expectedMinutes, expectedGoals, expectedAssists, cleanSheetProb, bonusExpectation }) {
+// ============================================
+// IMPROVED: Points mapping with better baseline
+// ============================================
+function mapExpectedPoints({
+  position,
+  expectedMinutes,
+  expectedGoals,
+  expectedAssists,
+  cleanSheetProb,
+  bonusExpectation,
+  seasonBaseline,
+}) {
   const points = POSITION_POINTS[position] ?? POSITION_POINTS.MID;
-  const minutesFactor = expectedMinutes / 90;
-  const appearancePoints = clamp(minutesFactor, 0, 1) + clamp(expectedMinutes / 60, 0, 1);
+  const minutesFactor = clamp(expectedMinutes / 90, 0, 1);
+
+  // Appearance points: 1pt for 1-59 mins, 2pts for 60+
+  const under60Prob = clamp(1 - (expectedMinutes / 60), 0, 1);
+  const over60Prob = clamp((expectedMinutes - 30) / 60, 0, 1);
+  const appearancePoints = (under60Prob * points.appearance1) + (over60Prob * points.appearance60);
+
   const goalPoints = expectedGoals * points.goal;
   const assistPoints = expectedAssists * points.assist;
-  const cleanSheetPoints = cleanSheetProb * points.cleanSheet * minutesFactor;
-  const bonusPoints = bonusExpectation;
+  const cleanSheetPoints = cleanSheetProb * points.cleanSheet * clamp(expectedMinutes / 60, 0, 1);
+
+  // Bonus: based on ICT with historical context
+  const bonusPoints = bonusExpectation * 0.8; // Slight discount
+
+  // Calculate base total
+  let total = appearancePoints + goalPoints + assistPoints + cleanSheetPoints + bonusPoints;
+
+  // Anchor to season baseline if available (prevents extreme predictions)
+  if (seasonBaseline?.ppg > 0 && minutesFactor > 0.5) {
+    const rawPrediction = total;
+    const baselineAnchor = seasonBaseline.ppg * 0.3; // 30% weight to baseline
+    const predictionWeight = 0.7; // 70% weight to calculated prediction
+    total = (rawPrediction * predictionWeight) + (baselineAnchor);
+
+    // Clamp to reasonable range based on position
+    const positionCap = position === 'GK' ? 8 : position === 'DEF' ? 10 : position === 'MID' ? 12 : 10;
+    total = clamp(total, 1, positionCap);
+  }
 
   return {
     appearancePoints,
@@ -191,10 +368,13 @@ function mapExpectedPoints({ position, expectedMinutes, expectedGoals, expectedA
     assistPoints,
     cleanSheetPoints,
     bonusPoints,
-    total: appearancePoints + goalPoints + assistPoints + cleanSheetPoints + bonusPoints,
+    total,
   };
 }
 
+// ============================================
+// MAIN: Project player with all improvements
+// ============================================
 function projectPlayer({
   player,
   fixtures,
@@ -203,14 +383,27 @@ function projectPlayer({
   understatPlayers,
   oddsMap,
 }) {
-  const position = player.position;
+  const positionMap = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' };
+  const position = typeof player.position === 'string'
+    ? player.position
+    : positionMap[player.element_type ?? player.position] ?? 'MID';
+
   const availability = player.chance_of_playing_next_round ?? player.chanceOfPlaying ?? 90;
-  const { expectedMinutes } = calculateExpectedMinutes(player.history, availability);
+  const history = player.history || [];
+
+  // Calculate season baseline
+  const seasonBaseline = calculateSeasonBaseline(player, history);
+
+  // Calculate expected minutes with returning player detection
+  const { expectedMinutes, isReturning, avgMinutes } = calculateExpectedMinutes(history, availability, player);
 
   const fixtureProjections = fixtures.map((fixture, index) => {
     const opponentStrength = strengthMap.get(fixture.opponentId);
     const opponentDefenceIndex = opponentStrength?.defenceIndex ?? 1;
     const understatPlayer = understatPlayers?.get(player.id) || null;
+
+    // Get historical H2H data
+    const h2hData = getHistoricalPerformanceVsOpponent(history, fixture.opponentId);
 
     const attacking = computeAttackingOutputs({
       player,
@@ -218,6 +411,9 @@ function projectPlayer({
       opponentDefenceIndex,
       fixtureDifficulty: fixture.difficulty,
       understatPlayer,
+      seasonBaseline,
+      h2hData,
+      isHome: fixture.isHome,
     });
 
     const fixtureProjection = projectFixture({
@@ -232,11 +428,17 @@ function projectPlayer({
       oddsMap,
     });
 
-    const cleanSheetProb = position === 'MID' || position === 'DEF' || position === 'GK'
-      ? (fixture.isHome ? fixtureProjection.homeCS : fixtureProjection.awayCS) / 100
-      : 0;
+    // Clean sheet probability (DEF/GK get full, MID gets reduced)
+    let cleanSheetProb = 0;
+    if (position === 'GK' || position === 'DEF') {
+      cleanSheetProb = (fixture.isHome ? fixtureProjection.homeCS : fixtureProjection.awayCS) / 100;
+    } else if (position === 'MID') {
+      cleanSheetProb = ((fixture.isHome ? fixtureProjection.homeCS : fixtureProjection.awayCS) / 100) * 0.25; // MID clean sheet is only 1pt
+    }
 
-    const bonusExpectation = clamp(parseFloat(player.ict_index || 0) / 20, 0, 1);
+    // Bonus expectation from ICT
+    const bonusExpectation = clamp(parseFloat(player.ict_index || 0) / 18, 0, 1.2);
+
     const pointsBreakdown = mapExpectedPoints({
       position,
       expectedMinutes,
@@ -244,6 +446,7 @@ function projectPlayer({
       expectedAssists: attacking.expectedAssists,
       cleanSheetProb,
       bonusExpectation,
+      seasonBaseline,
     });
 
     return {
@@ -264,17 +467,20 @@ function projectPlayer({
       bigChances: understatPlayer?.bigChances ?? null,
       isEstimated: attacking.isEstimated || fixtureProjection.estimated,
       weight: FIXTURE_WEIGHTS[index] ?? 0.8,
+      h2hBoost: attacking.h2hBoost,
     };
   });
 
-  const weightedPoints = fixtureProjections.reduce((sum, f) => sum + f.expectedPoints * f.weight, 0);
-  const next3 = fixtureProjections.slice(0, 3).reduce((sum, f) => sum + f.expectedPoints * f.weight, 0);
+  // Calculate aggregate xPts
   const next5 = fixtureProjections.slice(0, 5).reduce((sum, f) => sum + f.expectedPoints * f.weight, 0);
+  const next3 = fixtureProjections.slice(0, 3).reduce((sum, f) => sum + f.expectedPoints * f.weight, 0);
   const nextFixture = fixtureProjections[0]?.expectedPoints ?? 0;
 
-  const base = next5 || weightedPoints;
-  const low = base * 0.85;
-  const high = base * 1.15;
+  // Confidence intervals based on variance in player's history
+  const pointsVariance = calculatePointsVariance(history);
+  const varianceFactor = clamp(pointsVariance / 3, 0.1, 0.3);
+  const low = next5 * (1 - varianceFactor);
+  const high = next5 * (1 + varianceFactor);
 
   const baseBreakdown = fixtureProjections[0]?.breakdown ?? mapExpectedPoints({
     position,
@@ -283,6 +489,7 @@ function projectPlayer({
     expectedAssists: 0,
     cleanSheetProb: 0,
     bonusExpectation: 0,
+    seasonBaseline,
   });
 
   const advanced = fixtureProjections[0]
@@ -326,7 +533,31 @@ function projectPlayer({
     })),
     advanced,
     estimated: fixtureProjections.some(f => f.isEstimated),
+    seasonBaseline: {
+      ppg: seasonBaseline.ppg,
+      pp90: seasonBaseline.pp90,
+      gamesPlayed: seasonBaseline.gamesPlayed,
+    },
+    isReturning,
   };
+}
+
+// Calculate historical points variance for confidence bands
+function calculatePointsVariance(history) {
+  if (!history || history.length < 3) return 2.5; // Default moderate variance
+
+  const recentGames = history
+    .filter(h => (h.minutes ?? 0) > 30)
+    .slice(0, 10);
+
+  if (recentGames.length < 3) return 2.5;
+
+  const points = recentGames.map(h => h.total_points ?? 0);
+  const mean = points.reduce((a, b) => a + b, 0) / points.length;
+  const variance = points.reduce((sum, p) => sum + Math.pow(p - mean, 2), 0) / points.length;
+  const stdDev = Math.sqrt(variance);
+
+  return stdDev;
 }
 
 function projectTeam({ teamId, fixtures, strengthMap, avgGoalsPerGame, oddsMap }) {
@@ -376,4 +607,6 @@ module.exports = {
   projectTeam,
   poissonCleanSheetProbability,
   mapExpectedPoints,
+  calculateSeasonBaseline,
+  calculateExpectedMinutes,
 };

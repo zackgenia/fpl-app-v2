@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { usePlayerDetailData, usePlayerInsightsData } from '../hooks/useDrawerData';
+import { usePlayerMetrics } from '../hooks/useMetrics';
 import type { EntityRef } from '../types';
 import { ErrorMessage, FdrChip, Loading, PlayerPhoto, TeamBadge } from './ui';
 import { StatsSection } from './StatsSection';
@@ -18,8 +19,10 @@ export function PlayerDetails({
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const { data, loading, error } = usePlayerDetailData(playerId, isActive);
   const { data: insights } = usePlayerInsightsData(playerId, isActive, 5);
+  const { data: metrics } = usePlayerMetrics(playerId, isActive);
 
   const player = data?.player;
+  const advanced = metrics?.advanced;
   const positionLabel = player?.position ?? 'MID';
 
   const fixtureList = useMemo(() => {
@@ -100,11 +103,21 @@ export function PlayerDetails({
               </div>
             </div>
             {insights && (
-              <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 flex items-center justify-between">
-                <span>Confidence band</span>
-                <span className="font-semibold text-slate-800">
-                  {insights.xPts.low.toFixed(1)} / {predictedNext5.toFixed(1)} / {insights.xPts.high.toFixed(1)}
-                </span>
+              <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <div className="flex items-center justify-between text-xs text-slate-600 mb-2">
+                  <span className="font-medium">Confidence Band (90%)</span>
+                  <span className="font-semibold text-slate-800">
+                    {insights.xPts.low.toFixed(1)} / {predictedNext5.toFixed(1)} / {insights.xPts.high.toFixed(1)}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[10px] text-slate-400 border-t border-slate-100 pt-1.5">
+                  <span>Pessimistic (10th %ile)</span>
+                  <span>Expected (median)</span>
+                  <span>Optimistic (90th %ile)</span>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1.5 leading-relaxed">
+                  Based on fixture difficulty, form, and historical variance. 90% of outcomes fall within this range.
+                </p>
               </div>
             )}
           </StatsSection>
@@ -317,6 +330,72 @@ export function PlayerDetails({
               <p className="text-xs text-slate-500 mt-3">Understat shot breakdown coming soon.</p>
             )}
           </StatsSection>
+
+          {advanced && (advanced.goals !== undefined || advanced.leaguePosition !== undefined) && (
+            <StatsSection title="Season Performance">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                {advanced.goals !== undefined && (
+                  <div className="rounded-lg bg-emerald-50 p-2">
+                    <p className="text-xs text-emerald-600">Goals</p>
+                    <p className="text-lg font-semibold text-emerald-700">{advanced.goals}</p>
+                  </div>
+                )}
+                {advanced.assists !== undefined && (
+                  <div className="rounded-lg bg-blue-50 p-2">
+                    <p className="text-xs text-blue-600">Assists</p>
+                    <p className="text-lg font-semibold text-blue-700">{advanced.assists}</p>
+                  </div>
+                )}
+                {advanced.penalties !== undefined && advanced.penalties !== null && advanced.penalties > 0 && (
+                  <div className="rounded-lg bg-amber-50 p-2">
+                    <p className="text-xs text-amber-600">Penalties</p>
+                    <p className="text-lg font-semibold text-amber-700">{advanced.penalties}</p>
+                  </div>
+                )}
+                {advanced.playedMatches !== undefined && (
+                  <div className="rounded-lg bg-slate-50 p-2">
+                    <p className="text-xs text-slate-500">Matches</p>
+                    <p className="text-lg font-semibold text-slate-800">{advanced.playedMatches}</p>
+                  </div>
+                )}
+                {advanced.shots !== undefined && (
+                  <div className="rounded-lg bg-purple-50 p-2">
+                    <p className="text-xs text-purple-600">Shots</p>
+                    <p className="text-lg font-semibold text-purple-700">{advanced.shots}</p>
+                  </div>
+                )}
+                {advanced.rating !== undefined && (
+                  <div className="rounded-lg bg-orange-50 p-2">
+                    <p className="text-xs text-orange-600">Rating</p>
+                    <p className="text-lg font-semibold text-orange-700">{typeof advanced.rating === 'number' ? advanced.rating.toFixed(1) : advanced.rating}</p>
+                  </div>
+                )}
+              </div>
+              {advanced.leaguePosition !== undefined && (
+                <div className="mt-3 p-3 rounded-lg bg-fpl-forest/5 border border-fpl-forest/10">
+                  <p className="text-xs text-fpl-forest font-medium mb-2">Team Context</p>
+                  <div className="grid grid-cols-4 gap-2 text-center text-sm">
+                    <div>
+                      <p className="text-xs text-slate-500">Position</p>
+                      <p className="font-bold text-fpl-forest">{advanced.leaguePosition}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500">Points</p>
+                      <p className="font-semibold text-slate-700">{advanced.teamPoints}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500">GF</p>
+                      <p className="font-semibold text-emerald-600">{advanced.teamGoalsFor}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500">GA</p>
+                      <p className="font-semibold text-red-600">{advanced.teamGoalsAgainst}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </StatsSection>
+          )}
         </div>
       )}
     </div>

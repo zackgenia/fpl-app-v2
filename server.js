@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const {
   buildTeamStrength,
   projectFixture,
@@ -11,6 +12,43 @@ const {
   buildUnderstatMaps,
   buildOddsMap,
 } = require('./shared/insights');
+
+// ===================
+// FOOTBALL-DATA.ORG INTEGRATION
+// ===================
+function loadFootballDataSnapshot() {
+  const snapshotPath = path.join(__dirname, 'data/football-data/premier-league.json');
+  if (!fs.existsSync(snapshotPath)) {
+    console.log('Football-Data snapshot not found');
+    return null;
+  }
+  try {
+    const data = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+    console.log(`✓ Loaded Football-Data: ${data.standings?.length || 0} teams`);
+    return data;
+  } catch (err) {
+    console.error('Failed to load Football-Data:', err.message);
+    return null;
+  }
+}
+
+function matchFootballDataTeam(fplTeam, standings) {
+  if (!standings || !fplTeam) return null;
+  const fplName = fplTeam.name?.toLowerCase() || '';
+  const abbrevs = {
+    'man city': 'manchester city', 'man utd': 'manchester united',
+    'spurs': 'tottenham', 'wolves': 'wolverhampton',
+    'brighton': 'brighton & hove albion', "nott'm forest": 'nottingham forest',
+    'west ham': 'west ham united', 'newcastle': 'newcastle united',
+  };
+  const expanded = abbrevs[fplName] || fplName;
+  return standings.find(t => {
+    const fdName = t.teamName?.toLowerCase().replace(' fc', '').replace(' afc', '') || '';
+    return fdName.includes(expanded) || expanded.includes(fdName) || fdName.includes(fplName);
+  });
+}
+
+let footballDataSnapshot = null;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -96,11 +134,14 @@ function getTeamBadgeUrl(team) {
 }
 
 async function loadData() {
-  const cacheKey = 'loaded_data_v3';
+  const cacheKey = 'loaded_data_v5';
   if (longCache.get(cacheKey)) return;
 
   const bootstrap = await getBootstrap();
   const fixtures = await getFixtures();
+
+  // Load Football-Data.org snapshot for accurate season stats
+  footballDataSnapshot = loadFootballDataSnapshot();
 
   // Map teams by both ID and code
   teamsById = new Map(bootstrap.teams.map(t => [t.id, t]));
@@ -156,20 +197,38 @@ async function loadData() {
     const homeGames = last10.filter(r => r.isHome);
     const awayGames = last10.filter(r => !r.isHome);
 
-    const totalScored = last10.reduce((s, r) => s + r.scored, 0);
-    const totalConceded = last10.reduce((s, r) => s + r.conceded, 0);
     const cleanSheets = last10.filter(r => r.conceded === 0).length;
     const homeCleanSheets = homeGames.filter(r => r.conceded === 0).length;
     const awayCleanSheets = awayGames.filter(r => r.conceded === 0).length;
 
+    // Try to get accurate season stats from Football-Data.org
+    const fdTeam = footballDataSnapshot?.standings
+      ? matchFootballDataTeam(team, footballDataSnapshot.standings)
+      : null;
+
+    // Use Football-Data.org for accurate season-wide per-game stats, fallback to FPL data
+    let goalsPerGame, concededPerGame, played;
+    if (fdTeam && fdTeam.playedGames > 0) {
+      played = fdTeam.playedGames;
+      goalsPerGame = fdTeam.goalsFor / fdTeam.playedGames;
+      concededPerGame = fdTeam.goalsAgainst / fdTeam.playedGames;
+    } else {
+      // Fallback to FPL last 10 games
+      played = last10.length;
+      const totalScored = last10.reduce((s, r) => s + r.scored, 0);
+      const totalConceded = last10.reduce((s, r) => s + r.conceded, 0);
+      goalsPerGame = last10.length > 0 ? totalScored / last10.length : 0;
+      concededPerGame = last10.length > 0 ? totalConceded / last10.length : 0;
+    }
+
     teamStats.set(team.id, {
-      played: last10.length,
+      played,
       cleanSheets,
       cleanSheetRate: last10.length > 0 ? cleanSheets / last10.length : 0,
       homeCleanSheetRate: homeGames.length > 0 ? homeCleanSheets / homeGames.length : 0,
       awayCleanSheetRate: awayGames.length > 0 ? awayCleanSheets / awayGames.length : 0,
-      goalsPerGame: last10.length > 0 ? totalScored / last10.length : 0,
-      concededPerGame: last10.length > 0 ? totalConceded / last10.length : 0,
+      goalsPerGame,
+      concededPerGame,
       homeGoalsPerGame: homeGames.length > 0 ? homeGames.reduce((s, r) => s + r.scored, 0) / homeGames.length : 0,
       awayGoalsPerGame: awayGames.length > 0 ? awayGames.reduce((s, r) => s + r.scored, 0) / awayGames.length : 0,
       homeConcededPerGame: homeGames.length > 0 ? homeGames.reduce((s, r) => s + r.conceded, 0) / homeGames.length : 0,
@@ -330,22 +389,48 @@ async function calculatePrediction(player, horizon = 5) {
   const position = POSITION_MAP[player.element_type];
   const pts = POINTS_SYSTEM[position];
 
-  // Minutes calculation
-  const recentHistory = history.slice(-5);
-  const avgMinutes = recentHistory.length > 0
-    ? recentHistory.reduce((s, h) => s + h.minutes, 0) / recentHistory.length
-    : 45;
-  const availability = player.chance_of_playing_next_round ?? 100;
-  const minutesProb = Math.min(avgMinutes / 90, 1) * (availability / 100);
+  // IMPROVED: Smart minutes calculation that handles returning players
+  const sortedHistory = [...history].sort((a, b) => (b.round ?? 0) - (a.round ?? 0));
+  const recentHistory = sortedHistory.slice(0, 5);
 
-  // Base form score
-  const baseScore = recentHistory.length > 0
-    ? recentHistory.reduce((s, h) => s + h.total_points, 0) / recentHistory.length
+  // Detect returning player: recent 0-minute games followed by games with minutes
+  const gamesWithMinutes = recentHistory.filter(h => (h.minutes ?? 0) > 0);
+  const gamesWithZero = recentHistory.filter(h => (h.minutes ?? 0) === 0);
+  const isReturning = gamesWithZero.length >= 2 && gamesWithMinutes.length >= 1;
+
+  // For returning players, use games where they actually played
+  let avgMinutes;
+  if (isReturning) {
+    const fitGames = sortedHistory.filter(h => (h.minutes ?? 0) >= 45).slice(0, 10);
+    avgMinutes = fitGames.length > 0
+      ? fitGames.reduce((s, h) => s + h.minutes, 0) / fitGames.length
+      : 75;
+  } else {
+    avgMinutes = recentHistory.length > 0
+      ? recentHistory.reduce((s, h) => s + h.minutes, 0) / recentHistory.length
+      : 45;
+  }
+
+  const availability = player.chance_of_playing_next_round ?? 100;
+  const minutesProb = Math.min(avgMinutes / 90, 1) * Math.pow(availability / 100, 0.5);
+
+  // IMPROVED: Base form score that accounts for returning players
+  // Use games where they actually played
+  const recentPlayedGames = sortedHistory.filter(h => (h.minutes ?? 0) > 0).slice(0, 5);
+  const baseScore = recentPlayedGames.length > 0
+    ? recentPlayedGames.reduce((s, h) => s + h.total_points, 0) / recentPlayedGames.length
     : 2;
 
-  // Form trend
-  const formTrend = calculateFormTrend(history);
-  const formMult = formTrend === 'rising' ? 1.08 : formTrend === 'falling' ? 0.92 : 1.0;
+  // Season average as anchor
+  const seasonAvgPoints = player.total_points && history.length > 0
+    ? player.total_points / Math.max(history.filter(h => (h.minutes ?? 0) > 0).length, 1)
+    : baseScore;
+
+  // Form trend - use smarter calculation for returning players
+  const formTrend = isReturning ? 'stable' : calculateFormTrend(sortedHistory.filter(h => (h.minutes ?? 0) > 0));
+
+  // Form multiplier is softer - season baseline matters more
+  const formMult = formTrend === 'rising' ? 1.06 : formTrend === 'falling' ? 0.94 : 1.0;
 
   // Team momentum
   const momentum = teamMomentum.get(player.team) ?? 0.5;
@@ -410,34 +495,97 @@ async function calculatePrediction(player, horizon = 5) {
 
   const minutesRisk = 1 - minutesProb;
 
-  // Confidence calculation
+  // IMPROVED: Confidence calculation that reflects data quality
   const confidenceFactors = [];
   let confidenceScore = 0;
 
-  // Minutes component (0-35)
-  confidenceScore += Math.min(avgMinutes / 90, 1) * 35;
-  if (avgMinutes < 60) confidenceFactors.push({ text: 'Rotation risk', type: 'warning' });
+  // 1. Minutes security (0-30 points)
+  // Based on how nailed the player is when fit
+  const fitGames = sortedHistory.filter(h => (h.minutes ?? 0) > 0).slice(0, 10);
+  const avgMinutesWhenPlaying = fitGames.length > 0
+    ? fitGames.reduce((s, h) => s + h.minutes, 0) / fitGames.length
+    : 60;
+  const minutesSecurity = Math.min(avgMinutesWhenPlaying / 90, 1) * 30;
+  confidenceScore += minutesSecurity;
 
-  // Sample size (0-25)
-  confidenceScore += Math.min(history.length / 15, 1) * 25;
-  if (history.length < 5) confidenceFactors.push({ text: 'Limited match data', type: 'warning' });
+  if (avgMinutesWhenPlaying < 60) {
+    confidenceFactors.push({ text: 'Rotation risk', type: 'warning' });
+  } else if (avgMinutesWhenPlaying >= 85) {
+    confidenceFactors.push({ text: 'Nailed starter', type: 'positive' });
+  }
 
-  // Availability (0-20)
-  confidenceScore += (availability / 100) * 20;
-  if (availability < 100) confidenceFactors.push({ text: `${availability}% chance of playing`, type: availability < 75 ? 'danger' : 'warning' });
+  // 2. Sample size / track record (0-25 points)
+  const gamesPlayed = fitGames.length;
+  const sampleSizeScore = Math.min(gamesPlayed / 12, 1) * 25;
+  confidenceScore += sampleSizeScore;
 
-  // Form (0-20)
-  confidenceScore += formTrend === 'stable' ? 20 : formTrend === 'rising' ? 18 : 8;
-  if (formTrend === 'falling') confidenceFactors.push({ text: 'Form declining', type: 'danger' });
-  if (formTrend === 'rising') confidenceFactors.push({ text: 'Form improving', type: 'positive' });
+  if (gamesPlayed < 5) {
+    confidenceFactors.push({ text: 'Limited match data', type: 'warning' });
+  } else if (gamesPlayed >= 15) {
+    confidenceFactors.push({ text: 'Strong sample size', type: 'positive' });
+  }
 
-  // Team form
-  if (momentum > 0.65) confidenceFactors.push({ text: 'Team in good form', type: 'positive' });
-  if (momentum < 0.35) confidenceFactors.push({ text: 'Team struggling', type: 'warning' });
+  // 3. Availability (0-20 points)
+  // Use softer penalty for availability
+  const availabilityScore = Math.pow(availability / 100, 0.7) * 20;
+  confidenceScore += availabilityScore;
 
-  if (player.news) confidenceFactors.push({ text: player.news.substring(0, 60), type: 'info' });
+  if (availability < 100 && availability > 0) {
+    confidenceFactors.push({
+      text: `${availability}% chance of playing`,
+      type: availability < 50 ? 'danger' : availability < 75 ? 'warning' : 'info'
+    });
+  }
 
-  const confidence = Math.round(Math.min(100, confidenceScore));
+  // 4. Consistency (0-15 points) - based on points variance
+  const pointsHistory = fitGames.map(h => h.total_points ?? 0);
+  let consistencyScore = 15; // Default to good
+  if (pointsHistory.length >= 3) {
+    const mean = pointsHistory.reduce((a, b) => a + b, 0) / pointsHistory.length;
+    const variance = pointsHistory.reduce((sum, p) => sum + Math.pow(p - mean, 2), 0) / pointsHistory.length;
+    const cv = mean > 0 ? Math.sqrt(variance) / mean : 1; // Coefficient of variation
+    consistencyScore = Math.max(0, 15 - (cv * 10)); // Lower CV = higher score
+  }
+  confidenceScore += consistencyScore;
+
+  // 5. Form stability (0-10 points)
+  let formScore = 10;
+  if (formTrend === 'falling') {
+    formScore = 4;
+    confidenceFactors.push({ text: 'Form declining', type: 'danger' });
+  } else if (formTrend === 'rising') {
+    formScore = 8;
+    confidenceFactors.push({ text: 'Form improving', type: 'positive' });
+  }
+  confidenceScore += formScore;
+
+  // Bonus factors (can push above 100, capped)
+  if (momentum > 0.65) {
+    confidenceFactors.push({ text: 'Team in good form', type: 'positive' });
+    confidenceScore += 3;
+  }
+  if (momentum < 0.35) {
+    confidenceFactors.push({ text: 'Team struggling', type: 'warning' });
+    confidenceScore -= 3;
+  }
+
+  // Returning player bonus - they should have higher confidence once back
+  if (isReturning && gamesWithMinutes.some(h => (h.minutes ?? 0) >= 70)) {
+    confidenceFactors.push({ text: 'Back from absence', type: 'info' });
+    confidenceScore += 5;
+  }
+
+  // Premium player bonus - players with high total points have proven track record
+  const totalSeasonPoints = player.total_points ?? 0;
+  if (totalSeasonPoints >= 100) {
+    confidenceScore += 5;
+  }
+
+  if (player.news) {
+    confidenceFactors.push({ text: player.news.substring(0, 60), type: 'info' });
+  }
+
+  const confidence = Math.round(Math.min(100, Math.max(20, confidenceScore)));
 
   return {
     playerId: player.id,
@@ -725,15 +873,29 @@ app.get('/api/insights/fixture/:id', async (req, res) => {
     const homePlayers = bootstrap.elements.filter(p => p.team === fixture.team_h);
     const awayPlayers = bootstrap.elements.filter(p => p.team === fixture.team_a);
 
-    const buildKeyPlayers = teamPlayers => {
-      return teamPlayers
+    const buildKeyPlayers = async (teamPlayers) => {
+      // Filter to available players and sort by total points to prioritize key players
+      const topPlayers = teamPlayers
         .filter(p => p.status === 'a' || p.status === 'd')
-        .map(p => {
+        .sort((a, b) => (b.total_points ?? 0) - (a.total_points ?? 0))
+        .slice(0, 10); // Limit to top 10 to avoid too many API calls
+
+      const results = await Promise.all(
+        topPlayers.map(async (p) => {
+          // Fetch player history for accurate projections
+          let history = [];
+          try {
+            const summary = await getPlayerSummary(p.id);
+            history = summary.history || [];
+          } catch (e) {
+            // Continue with empty history if fetch fails
+          }
+
           const playerProjection = projectPlayer({
             player: {
               ...p,
               position: POSITION_MAP[p.element_type],
-              history: [],
+              history,
             },
             fixtures: [
               {
@@ -751,6 +913,7 @@ app.get('/api/insights/fixture/:id', async (req, res) => {
             understatPlayers: context.understatMaps.players,
             oddsMap: context.oddsMap,
           });
+
           return {
             id: p.id,
             name: p.web_name,
@@ -759,9 +922,18 @@ app.get('/api/insights/fixture/:id', async (req, res) => {
             xPts: playerProjection.xPts.nextFixture,
           };
         })
+      );
+
+      return results
         .sort((a, b) => b.xPts - a.xPts)
         .slice(0, 5);
     };
+
+    // Build key players with full history data (parallel)
+    const [homeKeyPlayers, awayKeyPlayers] = await Promise.all([
+      buildKeyPlayers(homePlayers),
+      buildKeyPlayers(awayPlayers),
+    ]);
 
     const response = {
       fixtureId,
@@ -779,8 +951,8 @@ app.get('/api/insights/fixture/:id', async (req, res) => {
         home: context.strengthMap.get(fixture.team_h)?.defenceIndex ?? 1,
         away: context.strengthMap.get(fixture.team_a)?.defenceIndex ?? 1,
       },
-      homeKeyPlayers: buildKeyPlayers(homePlayers),
-      awayKeyPlayers: buildKeyPlayers(awayPlayers),
+      homeKeyPlayers,
+      awayKeyPlayers,
       estimated: projection.estimated || context.understatMaps.players.size === 0,
       horizon,
     };
