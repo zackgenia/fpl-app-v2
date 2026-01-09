@@ -176,6 +176,80 @@ export interface Fixture {
   csChance: number;
 }
 
+export interface PlayerInsight {
+  playerId: number;
+  teamId: number;
+  position: Position;
+  horizon: number;
+  xPts: {
+    nextFixture: number;
+    next3: number;
+    next5: number;
+    low: number;
+    high: number;
+  };
+  breakdown: {
+    appearance: number;
+    goals: number;
+    assists: number;
+    cleanSheet: number;
+    bonus: number;
+  };
+  fixtures: {
+    fixtureId: number;
+    gameweek: number;
+    opponent: string;
+    opponentId: number;
+    opponentBadge: string;
+    isHome: boolean;
+    difficulty: number;
+    expectedPoints: number;
+  }[];
+  advanced: {
+    xG: number;
+    xA: number;
+    xGI: number;
+    xGI90: number;
+    shots: number | null;
+    bigChances: number | null;
+  };
+  estimated: boolean;
+}
+
+export interface FixtureInsight {
+  fixtureId: number;
+  homeTeamId: number;
+  awayTeamId: number;
+  homeXG: number;
+  awayXG: number;
+  homeCS: number;
+  awayCS: number;
+  attackIndex: { home: number; away: number };
+  defenceIndex: { home: number; away: number };
+  homeKeyPlayers: { id: number; name: string; position: Position; photoCode: number; xPts: number }[];
+  awayKeyPlayers: { id: number; name: string; position: Position; photoCode: number; xPts: number }[];
+  estimated: boolean;
+  horizon: number;
+}
+
+export interface TeamInsight {
+  teamId: number;
+  attackIndex: number;
+  defenceIndex: number;
+  upcomingCsChance: number;
+  impliedGoalsNext: number;
+  fixtures: {
+    fixtureId: number;
+    gameweek: number;
+    opponent: string;
+    isHome: boolean;
+    csChance: number;
+    impliedGoals: number;
+  }[];
+  estimated: boolean;
+  horizon: number;
+}
+
 export type Strategy = 'maxPoints' | 'value' | 'safety' | 'differential';
 
 export const POSITION_MAP: Record<number, Position> = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' };

@@ -1,0 +1,24 @@
+{
+  "source": "fbref",
+  "season": "YYYY",
+  "updatedAt": "ISO-8601",
+  "teams": [
+    {
+      "name": "Team Name",
+      "xG": null,
+      "xGA": null,
+      "shots": null,
+      "keyPasses": null
+    }
+  ],
+  "players": [
+    {
+      "name": "Player Name",
+      "team": "Team Name",
+      "minutes": null,
+      "npxG": null,
+      "npxGPer90": null,
+      "xA": null
+    }
+  ]
+}

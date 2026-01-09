@@ -1,4 +1,4 @@
-import type { RecommendationResponse, SquadPlayer, Position, Strategy, PlayerPrediction, TeamFixtureData, Fixture } from '../types';
+import type { RecommendationResponse, SquadPlayer, Position, Strategy, PlayerPrediction, TeamFixtureData, Fixture, PlayerInsight, TeamInsight, FixtureInsight } from '../types';
 
 const API_BASE = '/api';
 
@@ -68,4 +68,16 @@ export async function getTeamFixtures(numWeeks: number = 6): Promise<{ teams: Te
 
 export async function getLiveData(gw: number): Promise<{ gameweek: number; players: any[]; lastUpdated: string }> {
   return fetchAPI(`/live/${gw}`);
+}
+
+export async function getPlayerInsights(playerId: number, horizon: number = 5): Promise<PlayerInsight> {
+  return fetchAPI(`/insights/player/${playerId}?horizon=${horizon}`);
+}
+
+export async function getTeamInsights(teamId: number, horizon: number = 5): Promise<TeamInsight> {
+  return fetchAPI(`/insights/team/${teamId}?horizon=${horizon}`);
+}
+
+export async function getFixtureInsights(fixtureId: number, horizon: number = 5): Promise<FixtureInsight> {
+  return fetchAPI(`/insights/fixture/${fixtureId}?horizon=${horizon}`);
 }

@@ -132,8 +132,8 @@ function SlotCard({
           </div>
         ) : (
           <div className={`text-center ${variant === 'pitch' ? 'text-white/80' : 'text-slate-500'}`}>
-            <p className="text-sm font-semibold">{variant === 'pitch' ? `Empty ${slot.position}` : 'Bench Slot'}</p>
-            <p className="text-xs">{variant === 'pitch' ? 'Select slot & assign' : 'Click to select'}</p>
+            <p className="text-sm font-semibold">{variant === 'pitch' ? `Empty ${slot.position}` : `Bench ${slot.position}`}</p>
+            <p className="text-xs">{variant === 'pitch' ? 'Select slot & assign' : `Needs a ${slot.position}`}</p>
           </div>
         )}
       </button>
@@ -295,7 +295,8 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
   }, [assignPlayerToSlot, queuedAssignments, showLineupError, squadPlayerMap]);
 
   const isPlayerCompatible = useCallback((slot: LineupSlot, player: SquadPlayer) => (
-    slot.role !== 'XI' || slot.position === player.position
+    // All slots (both XI and bench) now have position requirements
+    !slot.position || slot.position === player.position
   ), []);
 
   const canDropToSlot = useCallback((slot: LineupSlot, drag: DragData) => {
@@ -393,6 +394,20 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
     if (!result.success) {
       setAddError(result.error || 'Cannot add player');
       setTimeout(() => setAddError(null), 3000);
+      return;
+    }
+    // Auto-assign to lineup after adding to squad
+    const squadPlayer: SquadPlayer = {
+      id: player.id,
+      webName: player.webName,
+      position: POSITION_MAP[player.position] as Position,
+      teamId: player.teamId,
+      cost: player.cost,
+      photoCode: player.photoCode,
+    };
+    const assignResult = autoAssignPlayer(squadPlayer);
+    if (!assignResult.success && assignResult.error !== 'Player already assigned') {
+      // Player added to squad but couldn't auto-assign - that's okay, user can assign manually
     }
   };
 
@@ -640,8 +655,8 @@ export function SquadBuilder({ players, teams, squad, loading, error, onRetry, o
 
             <div className="mt-4">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-semibold text-slate-800">Bench (4)</p>
-                <p className="text-xs text-slate-500">Keep unassigned players here</p>
+                <p className="text-sm font-semibold text-slate-800">Bench ({lineup.bench.length})</p>
+                <p className="text-xs text-slate-500">Position-specific slots based on formation</p>
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
                 {lineup.bench.map(slot => {

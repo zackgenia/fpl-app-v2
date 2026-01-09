@@ -29,6 +29,38 @@ const FORMATION_COUNTS: Record<Formation, Record<Exclude<Position, 'GK'>, number
 
 const STORAGE_KEY = 'fpl-lineup';
 
+// Squad limits: 2 GK, 5 DEF, 5 MID, 3 FWD = 15 players
+const SQUAD_LIMITS: Record<Position, number> = { GK: 2, DEF: 5, MID: 5, FWD: 3 };
+
+// Calculate bench positions based on formation
+// Bench = Squad limits - Starting XI requirements
+const createBenchForFormation = (formation: Formation): LineupSlot[] => {
+  const formationCounts = FORMATION_COUNTS[formation];
+  // Starting XI uses 1 GK, so bench gets 1 GK
+  // Outfield bench positions = squad limit - formation requirement
+  const benchDEF = SQUAD_LIMITS.DEF - formationCounts.DEF; // 5 - formation DEFs
+  const benchMID = SQUAD_LIMITS.MID - formationCounts.MID; // 5 - formation MIDs
+  const benchFWD = SQUAD_LIMITS.FWD - formationCounts.FWD; // 3 - formation FWDs
+
+  const slots: LineupSlot[] = [
+    { id: 'BENCH-GK', position: 'GK', playerId: null, role: 'BENCH' as const },
+  ];
+
+  // Add bench slots for each position based on what formation omits
+  for (let i = 0; i < benchDEF; i++) {
+    slots.push({ id: `BENCH-DEF-${i + 1}`, position: 'DEF', playerId: null, role: 'BENCH' as const });
+  }
+  for (let i = 0; i < benchMID; i++) {
+    slots.push({ id: `BENCH-MID-${i + 1}`, position: 'MID', playerId: null, role: 'BENCH' as const });
+  }
+  for (let i = 0; i < benchFWD; i++) {
+    slots.push({ id: `BENCH-FWD-${i + 1}`, position: 'FWD', playerId: null, role: 'BENCH' as const });
+  }
+
+  return slots;
+};
+
+// Legacy function for backwards compatibility during migration
 const createBench = (): LineupSlot[] =>
   Array.from({ length: 4 }, (_, i) => ({
     id: `BENCH-${i + 1}`,
@@ -55,7 +87,7 @@ const createStartingXI = (formation: Formation): LineupSlot[] => {
 const defaultState = (formation: Formation = '3-4-3'): LineupState => ({
   formation,
   startingXI: createStartingXI(formation),
-  bench: createBench(),
+  bench: createBenchForFormation(formation),
 });
 
 const sanitizeState = (state: LineupState | null): LineupState => {
@@ -63,11 +95,30 @@ const sanitizeState = (state: LineupState | null): LineupState => {
   const validFormation = FORMATIONS.includes(state.formation) ? state.formation : '3-4-3';
   const expectedCount = 1 + Object.values(FORMATION_COUNTS[validFormation]).reduce((sum, value) => sum + value, 0);
   const startingXI = state.startingXI?.length === expectedCount ? state.startingXI : createStartingXI(validFormation);
-  const bench = state.bench?.length ? state.bench.slice(0, 4) : createBench();
+
+  // Create new position-specific bench for the formation
+  const newBench = createBenchForFormation(validFormation);
+
+  // Migrate player IDs from old bench format if present
+  if (state.bench?.length) {
+    const oldPlayerIds = state.bench
+      .map(s => s.playerId)
+      .filter((id): id is number => id !== null);
+
+    // Fill new bench slots with old player IDs (will be validated later by squad sync)
+    let playerIndex = 0;
+    for (let i = 0; i < newBench.length && playerIndex < oldPlayerIds.length; i++) {
+      if (!newBench[i].playerId) {
+        newBench[i] = { ...newBench[i], playerId: oldPlayerIds[playerIndex] };
+        playerIndex++;
+      }
+    }
+  }
+
   return {
     formation: validFormation,
     startingXI: startingXI.map(slot => ({ ...slot, role: 'XI' as const })),
-    bench: createBench().map((slot, idx) => bench[idx] ? { ...slot, playerId: bench[idx].playerId ?? null } : slot),
+    bench: newBench,
   };
 };
 
@@ -125,12 +176,25 @@ export function useLineup(squadPlayers: SquadPlayer[]) {
       if (formation === lineup.formation) return;
       setLineup(prev => {
         const nextSlots = createStartingXI(formation);
-        const availablePlayers = prev.startingXI
+        // Gather all players from starting XI with their positions
+        const startingPlayers = prev.startingXI
           .map(slot => (slot.playerId ? { playerId: slot.playerId, position: slot.position } : null))
           .filter(Boolean) as { playerId: number; position: Position }[];
+        // Gather all players from bench with their positions
+        const benchPlayers = prev.bench
+          .map(slot => {
+            if (!slot.playerId) return null;
+            const player = squadMap.get(slot.playerId);
+            return player ? { playerId: slot.playerId, position: player.position } : null;
+          })
+          .filter(Boolean) as { playerId: number; position: Position }[];
+
+        const allPlayers = [...startingPlayers, ...benchPlayers];
         const used = new Set<number>();
+
+        // Fill starting XI - match by position
         const nextStarting = nextSlots.map(slot => {
-          const candidate = availablePlayers.find(
+          const candidate = allPlayers.find(
             p => p.position === slot.position && !used.has(p.playerId) && squadMap.has(p.playerId),
           );
           if (candidate) {
@@ -139,25 +203,22 @@ export function useLineup(squadPlayers: SquadPlayer[]) {
           }
           return slot;
         });
-        const baseBench = createBench();
-        const nextBench = baseBench.map((slot, index) => {
-          const prevSlot = prev.bench[index];
-          if (prevSlot?.playerId && squadMap.has(prevSlot.playerId) && !used.has(prevSlot.playerId)) {
-            used.add(prevSlot.playerId);
-            return { ...slot, playerId: prevSlot.playerId };
+
+        // Create new position-specific bench for the formation
+        const newBench = createBenchForFormation(formation);
+
+        // Fill bench slots - match by position
+        const filledBench = newBench.map(slot => {
+          const candidate = allPlayers.find(
+            p => p.position === slot.position && !used.has(p.playerId) && squadMap.has(p.playerId),
+          );
+          if (candidate) {
+            used.add(candidate.playerId);
+            return { ...slot, playerId: candidate.playerId };
           }
           return slot;
         });
-        const overflow = availablePlayers.filter(p => !used.has(p.playerId) && squadMap.has(p.playerId));
-        let overflowIndex = 0;
-        const filledBench = nextBench.map(slot => {
-          if (slot.playerId) return slot;
-          const candidate = overflow[overflowIndex];
-          if (!candidate) return slot;
-          overflowIndex += 1;
-          used.add(candidate.playerId);
-          return { ...slot, playerId: candidate.playerId };
-        });
+
         return { formation, startingXI: nextStarting, bench: filledBench };
       });
     },
@@ -181,7 +242,8 @@ export function useLineup(squadPlayers: SquadPlayer[]) {
       if (!slot) return { success: false, error: 'Slot not found' };
       if (slot.playerId) return { success: false, error: 'Slot already has a player' };
       if (assignedPlayerIds.has(player.id)) return { success: false, error: 'Player already assigned' };
-      if (slot.role === 'XI' && slot.position !== player.position) {
+      // Enforce position matching for both XI and bench slots
+      if (slot.position && slot.position !== player.position) {
         return { success: false, error: `This slot needs a ${slot.position}` };
       }
       setLineup(prev => {
@@ -200,11 +262,17 @@ export function useLineup(squadPlayers: SquadPlayer[]) {
   const autoAssignPlayer = useCallback(
     (player: SquadPlayer) => {
       if (assignedPlayerIds.has(player.id)) return { success: false, error: 'Player already assigned' };
-      const targetSlot =
-        lineup.startingXI.find(s => s.position === player.position && !s.playerId) ||
-        lineup.bench.find(s => !s.playerId);
-      if (!targetSlot) return { success: false, error: 'No available slot for this player' };
-      return assignPlayerToSlot(targetSlot.id, player);
+      // First try starting XI slot matching position
+      const startingSlot = lineup.startingXI.find(s => s.position === player.position && !s.playerId);
+      if (startingSlot) {
+        return assignPlayerToSlot(startingSlot.id, player);
+      }
+      // Then try bench slot matching position
+      const benchSlot = lineup.bench.find(s => s.position === player.position && !s.playerId);
+      if (benchSlot) {
+        return assignPlayerToSlot(benchSlot.id, player);
+      }
+      return { success: false, error: 'No available slot for this player' };
     },
     [assignPlayerToSlot, assignedPlayerIds, lineup],
   );

@@ -79,7 +79,7 @@ export function PlayerCard({ player, rank, onClick, compact = false }: PlayerCar
       </div>
 
       <div className="mt-4">
-        <ConfidenceBar confidence={player.confidence} />
+        <ConfidenceBar confidence={player.confidence} showTooltip />
         <ConfidenceFactors factors={player.confidenceFactors} />
       </div>
 

@@ -1,54 +1,12 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs');
-const {
-  buildTeamStrength,
-  projectFixture,
-  projectPlayer,
-  projectTeam,
-  loadUnderstatSnapshot,
-  loadOddsSnapshot,
-  buildUnderstatMaps,
-  buildOddsMap,
-} = require('./shared/insights');
-
-// ===================
-// FOOTBALL-DATA.ORG INTEGRATION
-// ===================
-function loadFootballDataSnapshot() {
-  const snapshotPath = path.join(__dirname, 'data/football-data/premier-league.json');
-  if (!fs.existsSync(snapshotPath)) {
-    console.log('Football-Data snapshot not found');
-    return null;
-  }
-  try {
-    const data = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
-    console.log(`✓ Loaded Football-Data: ${data.standings?.length || 0} teams`);
-    return data;
-  } catch (err) {
-    console.error('Failed to load Football-Data:', err.message);
-    return null;
-  }
-}
-
-function matchFootballDataTeam(fplTeam, standings) {
-  if (!standings || !fplTeam) return null;
-  const fplName = fplTeam.name?.toLowerCase() || '';
-  const abbrevs = {
-    'man city': 'manchester city', 'man utd': 'manchester united',
-    'spurs': 'tottenham', 'wolves': 'wolverhampton',
-    'brighton': 'brighton & hove albion', "nott'm forest": 'nottingham forest',
-    'west ham': 'west ham united', 'newcastle': 'newcastle united',
-  };
-  const expanded = abbrevs[fplName] || fplName;
-  return standings.find(t => {
-    const fdName = t.teamName?.toLowerCase().replace(' fc', '').replace(' afc', '') || '';
-    return fdName.includes(expanded) || expanded.includes(fdName) || fdName.includes(fplName);
-  });
-}
-
-let footballDataSnapshot = null;
+const { Cache } = require('./lib/cache');
+const { loadUnderstatSnapshot } = require('./lib/snapshots/understat');
+const { loadFbrefSnapshot } = require('./lib/snapshots/fbref');
+const { loadFootballDataSnapshot, matchFootballDataTeam } = require('./lib/snapshots/footballData');
+const { matchUnderstatPlayer, matchUnderstatTeam } = require('./lib/mappings/understat');
+const { createMockOddsProvider } = require('./lib/odds/mockProvider');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,53 +14,43 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+const ENABLE_UNDERSTAT = process.env.ENABLE_UNDERSTAT === 'true';
+const ENABLE_FBREF = process.env.ENABLE_FBREF === 'true';
+const ENABLE_ODDS = process.env.ENABLE_ODDS === 'true';
+const ENABLE_FOOTBALL_DATA = process.env.ENABLE_FOOTBALL_DATA === 'true';
+
 // ===================
 // CACHE SYSTEM
 // ===================
-class Cache {
-  constructor(ttlMs = 300000) {
-    this.cache = new Map();
-    this.ttl = ttlMs;
-  }
-  get(key) {
-    const item = this.cache.get(key);
-    if (!item) return null;
-    if (Date.now() > item.expiry) {
-      this.cache.delete(key);
-      return null;
-    }
-    return item.value;
-  }
-  set(key, value, customTtl) {
-    this.cache.set(key, { value, expiry: Date.now() + (customTtl || this.ttl) });
-  }
-  clear() {
-    this.cache.clear();
-  }
-}
-
-const cache = new Cache(300000);
+const sharedCache = new Cache(300000);
 const longCache = new Cache(1800000);
-const insightsCache = new Cache(90000);
+const metricsCache = new Cache(300000);
+
+const FPL_TTL = {
+  bootstrap: 300000,
+  fixtures: 300000,
+  elementSummary: 300000,
+  live: 30000,
+};
 
 // ===================
 // FPL API SERVICE
 // ===================
 const FPL_BASE_URL = 'https://fantasy.premierleague.com/api';
 
-async function fetchFPL(endpoint, retries = 3) {
-  const cached = cache.get(endpoint);
+async function fetchFPL(endpoint, { ttlMs, retries = 3 } = {}) {
+  const cached = sharedCache.get(endpoint);
   if (cached) return cached;
 
   let lastError;
   for (let i = 0; i < retries; i++) {
     try {
       const response = await fetch(`${FPL_BASE_URL}${endpoint}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) FPL-App/2.0' }
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) FPL-App/2.0' },
       });
       if (!response.ok) throw new Error(`FPL API error: ${response.status}`);
       const data = await response.json();
-      cache.set(endpoint, data);
+      sharedCache.set(endpoint, data, ttlMs);
       return data;
     } catch (err) {
       lastError = err;
@@ -112,10 +60,21 @@ async function fetchFPL(endpoint, retries = 3) {
   throw lastError;
 }
 
-async function getBootstrap() { return fetchFPL('/bootstrap-static/'); }
-async function getFixtures() { return fetchFPL('/fixtures/'); }
-async function getPlayerSummary(playerId) { return fetchFPL(`/element-summary/${playerId}/`); }
-async function getLiveGameweek(gw) { return fetchFPL(`/event/${gw}/live/`); }
+async function getBootstrapRaw() {
+  return fetchFPL('/bootstrap-static/', { ttlMs: FPL_TTL.bootstrap });
+}
+
+async function getFixturesRaw() {
+  return fetchFPL('/fixtures/', { ttlMs: FPL_TTL.fixtures });
+}
+
+async function getPlayerSummaryRaw(playerId) {
+  return fetchFPL(`/element-summary/${playerId}/`, { ttlMs: FPL_TTL.elementSummary });
+}
+
+async function getLiveGameweekRaw(gw) {
+  return fetchFPL(`/event/${gw}/live/`, { ttlMs: FPL_TTL.live });
+}
 
 // ===================
 // DATA STORES
@@ -126,6 +85,7 @@ let fixturesData = [];
 let teamMomentum = new Map();
 let teamStats = new Map();
 let teamStrength = new Map();
+let footballDataSnapshot = null;
 
 // Get badge URL using team.code (not team.id)
 function getTeamBadgeUrl(team) {
@@ -134,13 +94,13 @@ function getTeamBadgeUrl(team) {
 }
 
 async function loadData() {
-  const cacheKey = 'loaded_data_v5';
+  const cacheKey = 'loaded_data_v4';
   if (longCache.get(cacheKey)) return;
 
-  const bootstrap = await getBootstrap();
-  const fixtures = await getFixtures();
+  const bootstrap = await getBootstrapRaw();
+  const fixtures = await getFixturesRaw();
 
-  // Load Football-Data.org snapshot for accurate season stats
+  // Load Football-Data snapshot for accurate season stats
   footballDataSnapshot = loadFootballDataSnapshot();
 
   // Map teams by both ID and code
@@ -149,7 +109,8 @@ async function loadData() {
   fixturesData = fixtures;
 
   // Get finished fixtures for analysis
-  const finished = fixtures.filter(f => f.finished && f.team_h_score !== null)
+  const finished = fixtures
+    .filter(f => f.finished && f.team_h_score !== null)
     .sort((a, b) => (b.event ?? 0) - (a.event ?? 0));
 
   // Calculate team momentum from last 5 games (weighted by recency)
@@ -168,7 +129,7 @@ async function loadData() {
       conceded: f.team_a_score,
       isHome: true,
       opponent: f.team_a,
-      gw: f.event
+      gw: f.event,
     });
     teamResults.get(f.team_a).push({
       points: awayWin ? 3 : draw ? 1 : 0,
@@ -176,7 +137,7 @@ async function loadData() {
       conceded: f.team_h_score,
       isHome: false,
       opponent: f.team_h,
-      gw: f.event
+      gw: f.event,
     });
   }
 
@@ -193,7 +154,7 @@ async function loadData() {
     });
     teamMomentum.set(team.id, last5.length > 0 ? momentum / 45 : 0.5);
 
-    // Detailed stats from last 10 games
+    // Detailed stats from last 10 games (for form/recent trends)
     const homeGames = last10.filter(r => r.isHome);
     const awayGames = last10.filter(r => !r.isHome);
 
@@ -229,12 +190,18 @@ async function loadData() {
       awayCleanSheetRate: awayGames.length > 0 ? awayCleanSheets / awayGames.length : 0,
       goalsPerGame,
       concededPerGame,
+      // Season totals from Football-Data (if available)
+      seasonGoalsFor: fdTeam?.goalsFor ?? null,
+      seasonGoalsAgainst: fdTeam?.goalsAgainst ?? null,
+      seasonPlayed: fdTeam?.playedGames ?? null,
+      leaguePosition: fdTeam?.position ?? null,
+      // Home/away splits from FPL recent games
       homeGoalsPerGame: homeGames.length > 0 ? homeGames.reduce((s, r) => s + r.scored, 0) / homeGames.length : 0,
       awayGoalsPerGame: awayGames.length > 0 ? awayGames.reduce((s, r) => s + r.scored, 0) / awayGames.length : 0,
       homeConcededPerGame: homeGames.length > 0 ? homeGames.reduce((s, r) => s + r.conceded, 0) / homeGames.length : 0,
       awayConcededPerGame: awayGames.length > 0 ? awayGames.reduce((s, r) => s + r.conceded, 0) / awayGames.length : 0,
       form: last5.reduce((s, r) => s + r.points, 0), // Out of 15
-      last5Results: last5.map(r => r.points === 3 ? 'W' : r.points === 1 ? 'D' : 'L').join(''),
+      last5Results: last5.map(r => (r.points === 3 ? 'W' : r.points === 1 ? 'D' : 'L')).join(''),
     });
 
     // Team strength from FPL API
@@ -250,31 +217,6 @@ async function loadData() {
   longCache.set(cacheKey, true);
 }
 
-async function getInsightsContext(bootstrap) {
-  const cached = insightsCache.get('context');
-  if (cached) return cached;
-
-  const understatSnapshot = await loadUnderstatSnapshot();
-  const oddsSnapshot = await loadOddsSnapshot();
-  const understatMaps = buildUnderstatMaps(understatSnapshot);
-  const oddsMap = buildOddsMap(oddsSnapshot);
-  const { strengthMap, avgGoalsPerGame } = buildTeamStrength({
-    teams: bootstrap.teams,
-    teamStats,
-    understatTeams: understatMaps.teams,
-  });
-
-  const context = {
-    understatMaps,
-    oddsMap,
-    strengthMap,
-    avgGoalsPerGame,
-  };
-
-  insightsCache.set('context', context, 60000);
-  return context;
-}
-
 // ===================
 // CLEAN SHEET CALCULATION - More robust
 // ===================
@@ -288,27 +230,27 @@ function calculateCleanSheetProbability(teamId, opponentId, isHome) {
 
   // Base rate from team's actual clean sheet record
   const baseRate = isHome ? teamStat.homeCleanSheetRate : teamStat.awayCleanSheetRate;
-  
+
   // Opponent's scoring rate
   const oppScoringRate = isHome ? oppStat.awayGoalsPerGame : oppStat.homeGoalsPerGame;
-  
+
   // Strength comparison (defence vs attack)
   const defStrength = isHome ? teamStr.homeDefence : teamStr.awayDefence;
   const oppAttStrength = isHome ? oppStr.awayAttack : oppStr.homeAttack;
-  
+
   // Calculate probability
   let prob = baseRate * 100;
-  
+
   // Adjust based on opponent's attacking threat
   if (oppScoringRate > 2) prob *= 0.6;
   else if (oppScoringRate > 1.5) prob *= 0.75;
   else if (oppScoringRate > 1) prob *= 0.9;
   else if (oppScoringRate < 0.8) prob *= 1.2;
-  
+
   // Adjust based on strength differential
   const strengthDiff = defStrength - oppAttStrength;
   prob += strengthDiff / 20;
-  
+
   // Clamp between 5% and 60%
   return Math.round(Math.max(5, Math.min(60, prob)));
 }
@@ -319,26 +261,26 @@ function calculateCleanSheetProbability(teamId, opponentId, isHome) {
 function calculateGoalProbability(player, opponentId, isHome) {
   const oppStat = teamStats.get(opponentId);
   const oppStr = teamStrength.get(opponentId);
-  
+
   if (!oppStat || !oppStr) return Math.round((player.expected_goals_per_90 || 0) * 100);
 
   // Base from xG per 90
   let baseProb = (player.expected_goals_per_90 || 0) * 100;
-  
+
   // Opponent's defensive record
   const oppConcededRate = isHome ? oppStat.awayConcededPerGame : oppStat.homeConcededPerGame;
-  
+
   // Adjust based on how leaky the opponent is
   if (oppConcededRate > 2) baseProb *= 1.4;
   else if (oppConcededRate > 1.5) baseProb *= 1.2;
   else if (oppConcededRate < 0.8) baseProb *= 0.7;
   else if (oppConcededRate < 1) baseProb *= 0.85;
-  
+
   // Penalty taker bonus
   if (player.penalties_order !== null && player.penalties_order <= 1) {
     baseProb += 8;
   }
-  
+
   return Math.round(Math.max(0, Math.min(80, baseProb)));
 }
 
@@ -356,12 +298,18 @@ const POINTS_SYSTEM = {
 function getFdrMultiplier(fdr, position) {
   const factor = position === 'FWD' ? 0.7 : position === 'MID' ? 0.8 : 1.0;
   switch (fdr) {
-    case 1: return 1 + (0.30 * factor);
-    case 2: return 1 + (0.12 * factor);
-    case 3: return 1.0;
-    case 4: return 1 - (0.10 * factor);
-    case 5: return 1 - (0.20 * factor);
-    default: return 1.0;
+    case 1:
+      return 1 + (0.30 * factor);
+    case 2:
+      return 1 + (0.12 * factor);
+    case 3:
+      return 1.0;
+    case 4:
+      return 1 - (0.10 * factor);
+    case 5:
+      return 1 - (0.20 * factor);
+    default:
+      return 1.0;
   }
 }
 
@@ -383,54 +331,28 @@ async function calculatePrediction(player, horizon = 5) {
   await loadData();
 
   const team = teamsById.get(player.team);
-  const summary = await getPlayerSummary(player.id);
+  const summary = await getPlayerSummaryRaw(player.id);
   const history = summary.history;
   const upcoming = summary.fixtures.slice(0, horizon);
   const position = POSITION_MAP[player.element_type];
   const pts = POINTS_SYSTEM[position];
 
-  // IMPROVED: Smart minutes calculation that handles returning players
-  const sortedHistory = [...history].sort((a, b) => (b.round ?? 0) - (a.round ?? 0));
-  const recentHistory = sortedHistory.slice(0, 5);
-
-  // Detect returning player: recent 0-minute games followed by games with minutes
-  const gamesWithMinutes = recentHistory.filter(h => (h.minutes ?? 0) > 0);
-  const gamesWithZero = recentHistory.filter(h => (h.minutes ?? 0) === 0);
-  const isReturning = gamesWithZero.length >= 2 && gamesWithMinutes.length >= 1;
-
-  // For returning players, use games where they actually played
-  let avgMinutes;
-  if (isReturning) {
-    const fitGames = sortedHistory.filter(h => (h.minutes ?? 0) >= 45).slice(0, 10);
-    avgMinutes = fitGames.length > 0
-      ? fitGames.reduce((s, h) => s + h.minutes, 0) / fitGames.length
-      : 75;
-  } else {
-    avgMinutes = recentHistory.length > 0
-      ? recentHistory.reduce((s, h) => s + h.minutes, 0) / recentHistory.length
-      : 45;
-  }
-
+  // Minutes calculation
+  const recentHistory = history.slice(-5);
+  const avgMinutes = recentHistory.length > 0
+    ? recentHistory.reduce((s, h) => s + h.minutes, 0) / recentHistory.length
+    : 45;
   const availability = player.chance_of_playing_next_round ?? 100;
-  const minutesProb = Math.min(avgMinutes / 90, 1) * Math.pow(availability / 100, 0.5);
+  const minutesProb = Math.min(avgMinutes / 90, 1) * (availability / 100);
 
-  // IMPROVED: Base form score that accounts for returning players
-  // Use games where they actually played
-  const recentPlayedGames = sortedHistory.filter(h => (h.minutes ?? 0) > 0).slice(0, 5);
-  const baseScore = recentPlayedGames.length > 0
-    ? recentPlayedGames.reduce((s, h) => s + h.total_points, 0) / recentPlayedGames.length
+  // Base form score
+  const baseScore = recentHistory.length > 0
+    ? recentHistory.reduce((s, h) => s + h.total_points, 0) / recentHistory.length
     : 2;
 
-  // Season average as anchor
-  const seasonAvgPoints = player.total_points && history.length > 0
-    ? player.total_points / Math.max(history.filter(h => (h.minutes ?? 0) > 0).length, 1)
-    : baseScore;
-
-  // Form trend - use smarter calculation for returning players
-  const formTrend = isReturning ? 'stable' : calculateFormTrend(sortedHistory.filter(h => (h.minutes ?? 0) > 0));
-
-  // Form multiplier is softer - season baseline matters more
-  const formMult = formTrend === 'rising' ? 1.06 : formTrend === 'falling' ? 0.94 : 1.0;
+  // Form trend
+  const formTrend = calculateFormTrend(history);
+  const formMult = formTrend === 'rising' ? 1.08 : formTrend === 'falling' ? 0.92 : 1.0;
 
   // Team momentum
   const momentum = teamMomentum.get(player.team) ?? 0.5;
@@ -449,18 +371,18 @@ async function calculatePrediction(player, horizon = 5) {
 
     // Goal/assist probability
     const goalProb = calculateGoalProbability(player, oppId, fix.is_home) / 100;
-    const assistProb = (player.expected_assists_per_90 || 0) * 
-      (fix.is_home ? 1.1 : 0.9) * 
-      (teamStats.get(oppId)?.awayConcededPerGame > 1.5 ? 1.2 : 1);
+    const assistProb = (player.expected_assists_per_90 || 0)
+      * (fix.is_home ? 1.1 : 0.9)
+      * (teamStats.get(oppId)?.awayConcededPerGame > 1.5 ? 1.2 : 1);
 
     // Calculate expected points for this fixture
     let fixPoints = 2 * minutesProb; // Appearance
     fixPoints += pts.cleanSheet * csProb * minutesProb;
     fixPoints += pts.goal * goalProb * minutesProb;
     fixPoints += pts.assist * assistProb * minutesProb;
-    
+
     // Bonus estimate
-    const avgBonus = history.length > 0 
+    const avgBonus = history.length > 0
       ? history.slice(-10).reduce((s, h) => s + h.bonus, 0) / Math.min(10, history.length)
       : 0;
     fixPoints += avgBonus * minutesProb;
@@ -495,97 +417,34 @@ async function calculatePrediction(player, horizon = 5) {
 
   const minutesRisk = 1 - minutesProb;
 
-  // IMPROVED: Confidence calculation that reflects data quality
+  // Confidence calculation
   const confidenceFactors = [];
   let confidenceScore = 0;
 
-  // 1. Minutes security (0-30 points)
-  // Based on how nailed the player is when fit
-  const fitGames = sortedHistory.filter(h => (h.minutes ?? 0) > 0).slice(0, 10);
-  const avgMinutesWhenPlaying = fitGames.length > 0
-    ? fitGames.reduce((s, h) => s + h.minutes, 0) / fitGames.length
-    : 60;
-  const minutesSecurity = Math.min(avgMinutesWhenPlaying / 90, 1) * 30;
-  confidenceScore += minutesSecurity;
+  // Minutes component (0-35)
+  confidenceScore += Math.min(avgMinutes / 90, 1) * 35;
+  if (avgMinutes < 60) confidenceFactors.push({ text: 'Rotation risk', type: 'warning' });
 
-  if (avgMinutesWhenPlaying < 60) {
-    confidenceFactors.push({ text: 'Rotation risk', type: 'warning' });
-  } else if (avgMinutesWhenPlaying >= 85) {
-    confidenceFactors.push({ text: 'Nailed starter', type: 'positive' });
-  }
+  // Sample size (0-25)
+  confidenceScore += Math.min(history.length / 15, 1) * 25;
+  if (history.length < 5) confidenceFactors.push({ text: 'Limited match data', type: 'warning' });
 
-  // 2. Sample size / track record (0-25 points)
-  const gamesPlayed = fitGames.length;
-  const sampleSizeScore = Math.min(gamesPlayed / 12, 1) * 25;
-  confidenceScore += sampleSizeScore;
+  // Availability (0-20)
+  confidenceScore += (availability / 100) * 20;
+  if (availability < 100) confidenceFactors.push({ text: `${availability}% chance of playing`, type: availability < 75 ? 'danger' : 'warning' });
 
-  if (gamesPlayed < 5) {
-    confidenceFactors.push({ text: 'Limited match data', type: 'warning' });
-  } else if (gamesPlayed >= 15) {
-    confidenceFactors.push({ text: 'Strong sample size', type: 'positive' });
-  }
+  // Form (0-20)
+  confidenceScore += formTrend === 'stable' ? 20 : formTrend === 'rising' ? 18 : 8;
+  if (formTrend === 'falling') confidenceFactors.push({ text: 'Form declining', type: 'danger' });
+  if (formTrend === 'rising') confidenceFactors.push({ text: 'Form improving', type: 'positive' });
 
-  // 3. Availability (0-20 points)
-  // Use softer penalty for availability
-  const availabilityScore = Math.pow(availability / 100, 0.7) * 20;
-  confidenceScore += availabilityScore;
+  // Team form
+  if (momentum > 0.65) confidenceFactors.push({ text: 'Team in good form', type: 'positive' });
+  if (momentum < 0.35) confidenceFactors.push({ text: 'Team struggling', type: 'warning' });
 
-  if (availability < 100 && availability > 0) {
-    confidenceFactors.push({
-      text: `${availability}% chance of playing`,
-      type: availability < 50 ? 'danger' : availability < 75 ? 'warning' : 'info'
-    });
-  }
+  if (player.news) confidenceFactors.push({ text: player.news.substring(0, 60), type: 'info' });
 
-  // 4. Consistency (0-15 points) - based on points variance
-  const pointsHistory = fitGames.map(h => h.total_points ?? 0);
-  let consistencyScore = 15; // Default to good
-  if (pointsHistory.length >= 3) {
-    const mean = pointsHistory.reduce((a, b) => a + b, 0) / pointsHistory.length;
-    const variance = pointsHistory.reduce((sum, p) => sum + Math.pow(p - mean, 2), 0) / pointsHistory.length;
-    const cv = mean > 0 ? Math.sqrt(variance) / mean : 1; // Coefficient of variation
-    consistencyScore = Math.max(0, 15 - (cv * 10)); // Lower CV = higher score
-  }
-  confidenceScore += consistencyScore;
-
-  // 5. Form stability (0-10 points)
-  let formScore = 10;
-  if (formTrend === 'falling') {
-    formScore = 4;
-    confidenceFactors.push({ text: 'Form declining', type: 'danger' });
-  } else if (formTrend === 'rising') {
-    formScore = 8;
-    confidenceFactors.push({ text: 'Form improving', type: 'positive' });
-  }
-  confidenceScore += formScore;
-
-  // Bonus factors (can push above 100, capped)
-  if (momentum > 0.65) {
-    confidenceFactors.push({ text: 'Team in good form', type: 'positive' });
-    confidenceScore += 3;
-  }
-  if (momentum < 0.35) {
-    confidenceFactors.push({ text: 'Team struggling', type: 'warning' });
-    confidenceScore -= 3;
-  }
-
-  // Returning player bonus - they should have higher confidence once back
-  if (isReturning && gamesWithMinutes.some(h => (h.minutes ?? 0) >= 70)) {
-    confidenceFactors.push({ text: 'Back from absence', type: 'info' });
-    confidenceScore += 5;
-  }
-
-  // Premium player bonus - players with high total points have proven track record
-  const totalSeasonPoints = player.total_points ?? 0;
-  if (totalSeasonPoints >= 100) {
-    confidenceScore += 5;
-  }
-
-  if (player.news) {
-    confidenceFactors.push({ text: player.news.substring(0, 60), type: 'info' });
-  }
-
-  const confidence = Math.round(Math.min(100, Math.max(20, confidenceScore)));
+  const confidence = Math.round(Math.min(100, confidenceScore));
 
   return {
     playerId: player.id,
@@ -629,15 +488,344 @@ async function calculatePrediction(player, horizon = 5) {
 }
 
 // ===================
+// METRICS BUILDERS
+// ===================
+async function buildPlayerMetrics(playerId) {
+  const cacheKey = `playerMetrics:${playerId}`;
+  const cached = metricsCache.get(cacheKey);
+  if (cached) return cached;
+
+  const bootstrap = await getBootstrapRaw();
+  const player = bootstrap.elements.find(p => p.id === playerId);
+  if (!player) return null;
+
+  await loadData();
+  const summary = await getPlayerSummaryRaw(playerId);
+  const understatSnapshot = ENABLE_UNDERSTAT ? await loadUnderstatSnapshot() : null;
+  const fbrefSnapshot = ENABLE_FBREF ? await loadFbrefSnapshot() : null;
+  const history = summary.history ?? [];
+  const recentHistory = history.slice(-5);
+
+  const minutesLast5 = recentHistory.length > 0
+    ? Math.round(recentHistory.reduce((s, h) => s + h.minutes, 0) / recentHistory.length)
+    : 0;
+  const minutesTrend = recentHistory.length >= 4
+    ? Math.round(
+      (recentHistory.slice(-2).reduce((s, h) => s + h.minutes, 0) / 2)
+      - (recentHistory.slice(0, 2).reduce((s, h) => s + h.minutes, 0) / 2)
+    )
+    : 0;
+
+  const team = teamsById.get(player.team);
+
+  const nextFixtures = summary.fixtures.slice(0, 5).map(fix => {
+    const oppId = fix.is_home ? fix.team_a : fix.team_h;
+    const opp = teamsById.get(oppId);
+    return {
+      fixtureId: fix.id,
+      opponent: opp?.short_name ?? 'UNK',
+      opponentId: oppId,
+      isHome: fix.is_home,
+      difficulty: fix.difficulty,
+      kickoff: fix.kickoff_time,
+    };
+  });
+
+  let advanced = null;
+
+  if (understatSnapshot) {
+    const understatPlayer = matchUnderstatPlayer(player, team, understatSnapshot.players);
+    const understatTeam = matchUnderstatTeam(team, understatSnapshot.teams);
+
+    if (understatPlayer || understatTeam) {
+      advanced = {
+        xG: understatPlayer?.xG ?? null,
+        xA: understatPlayer?.xA ?? null,
+        xGI: understatPlayer?.xGI ?? null,
+        shots: understatPlayer?.shots ?? null,
+        bigChances: null,
+        teamXG: understatTeam?.xG ?? null,
+        oppXGA: null,
+      };
+    }
+  } else if (fbrefSnapshot) {
+    advanced = null;
+  }
+
+  const metrics = {
+    identity: {
+      id: player.id,
+      name: player.web_name,
+      teamId: player.team,
+      teamName: team?.name ?? 'Unknown',
+      position: POSITION_MAP[player.element_type],
+    },
+    fantasy: {
+      price: player.now_cost,
+      ownership: parseFloat(player.selected_by_percent || 0),
+      form: parseFloat(player.form || 0),
+      points: player.total_points,
+      minutes: player.minutes,
+      transfersTrend: (player.transfers_in_event ?? 0) - (player.transfers_out_event ?? 0),
+      ictIndex: parseFloat(player.ict_index || 0),
+      bps: player.bps ?? null,
+      bonus: player.bonus ?? null,
+    },
+    role: {
+      starts: history.filter(h => h.minutes > 0).length,
+      minutesLast5,
+      minutesTrend,
+    },
+    fixtures: {
+      nextFixtures,
+    },
+    advanced,
+    derived: {
+      expectedPointsNext: null,
+      expectedGoalsNext: null,
+      expectedCleanSheetProb: null,
+    },
+  };
+
+  metricsCache.set(cacheKey, metrics);
+  return metrics;
+}
+
+async function buildTeamMetrics(teamId) {
+  const cacheKey = `teamMetrics:${teamId}`;
+  const cached = metricsCache.get(cacheKey);
+  if (cached) return cached;
+
+  await loadData();
+  const bootstrap = await getBootstrapRaw();
+  const team = bootstrap.teams.find(t => t.id === teamId);
+  if (!team) return null;
+
+  const understatSnapshot = ENABLE_UNDERSTAT ? await loadUnderstatSnapshot() : null;
+  const fbrefSnapshot = ENABLE_FBREF ? await loadFbrefSnapshot() : null;
+
+  const currentGW = bootstrap.events.find(gw => gw.is_current)?.id ?? 1;
+  const upcomingFixtures = fixturesData
+    .filter(f => f.event !== null && f.event >= currentGW && f.event < currentGW + 5)
+    .filter(f => f.team_h === teamId || f.team_a === teamId)
+    .map(f => {
+      const isHome = f.team_h === teamId;
+      const oppId = isHome ? f.team_a : f.team_h;
+      const opp = teamsById.get(oppId);
+      return {
+        fixtureId: f.id,
+        opponent: opp?.short_name ?? 'UNK',
+        opponentId: oppId,
+        isHome,
+        difficulty: isHome ? f.team_h_difficulty : f.team_a_difficulty,
+        kickoff: f.kickoff_time,
+      };
+    });
+
+  const fdrAverage = upcomingFixtures.length > 0
+    ? upcomingFixtures.reduce((s, f) => s + f.difficulty, 0) / upcomingFixtures.length
+    : 0;
+
+  const stats = teamStats.get(teamId) || {};
+  const strength = teamStrength.get(teamId) || {};
+
+  let advanced = null;
+  if (understatSnapshot) {
+    const understatTeam = matchUnderstatTeam(team, understatSnapshot.teams);
+    if (understatTeam) {
+      advanced = {
+        xGFor: understatTeam.xG ?? null,
+        xGAgainst: understatTeam.xGA ?? null,
+        homeXGFor: null,
+        awayXGFor: null,
+        homeXGAgainst: null,
+        awayXGAgainst: null,
+      };
+    }
+  } else if (fbrefSnapshot) {
+    advanced = null;
+  }
+
+  const metrics = {
+    basic: {
+      id: team.id,
+      name: team.name,
+      shortName: team.short_name,
+      badge: getTeamBadgeUrl(team),
+    },
+    fantasy: {
+      fdrAverage: Math.round(fdrAverage * 10) / 10,
+      upcomingFixtures,
+    },
+    advanced,
+    derived: {
+      attackStrength: strength.homeAttack ?? null,
+      defenceStrength: strength.homeDefence ?? null,
+      cleanSheetRateProxy: stats.cleanSheetRate ?? null,
+    },
+  };
+
+  metricsCache.set(cacheKey, metrics);
+  return metrics;
+}
+
+async function buildFixtureContext(fixtureId) {
+  const cacheKey = `fixtureContext:${fixtureId}`;
+  const cached = metricsCache.get(cacheKey);
+  if (cached) return cached;
+
+  await loadData();
+  const bootstrap = await getBootstrapRaw();
+  const fixture = fixturesData.find(f => f.id === fixtureId);
+  if (!fixture) return null;
+
+  const oddsProvider = ENABLE_ODDS ? createMockOddsProvider({ teamStats, teamStrength }) : null;
+  const homeTeam = teamsById.get(fixture.team_h);
+  const awayTeam = teamsById.get(fixture.team_a);
+  const impliedGoals = oddsProvider ? oddsProvider.getImpliedGoals(fixture) : null;
+  const homeCS = oddsProvider
+    ? oddsProvider.getCleanSheetProb(fixture.team_h, fixture.team_a, true)
+    : calculateCleanSheetProbability(fixture.team_h, fixture.team_a, true);
+  const awayCS = oddsProvider
+    ? oddsProvider.getCleanSheetProb(fixture.team_a, fixture.team_h, false)
+    : calculateCleanSheetProbability(fixture.team_a, fixture.team_h, false);
+
+  const topPlayers = (teamId) => {
+    const players = bootstrap.elements
+      .filter(p => p.team === teamId)
+      .sort((a, b) => parseFloat(b.selected_by_percent || 0) - parseFloat(a.selected_by_percent || 0))
+      .slice(0, 3);
+
+    return players.map(p => ({
+      id: p.id,
+      name: p.web_name,
+      position: POSITION_MAP[p.element_type],
+      ownership: parseFloat(p.selected_by_percent || 0),
+    }));
+  };
+
+  const context = {
+    id: fixture.id,
+    kickoff: fixture.kickoff_time,
+    teams: {
+      homeId: fixture.team_h,
+      awayId: fixture.team_a,
+      homeName: homeTeam?.short_name ?? 'UNK',
+      awayName: awayTeam?.short_name ?? 'UNK',
+    },
+    difficulty: {
+      home: fixture.team_h_difficulty,
+      away: fixture.team_a_difficulty,
+    },
+    impliedGoals,
+    cleanSheetProb: {
+      homeCS,
+      awayCS,
+    },
+    expectedCleanSheetPoints: {
+      home: Math.round((homeCS / 100) * 4 * 10) / 10,
+      away: Math.round((awayCS / 100) * 4 * 10) / 10,
+    },
+    keyPlayers: {
+      home: topPlayers(fixture.team_h),
+      away: topPlayers(fixture.team_a),
+    },
+  };
+
+  metricsCache.set(cacheKey, context);
+  return context;
+}
+
+// ===================
 // API ROUTES
 // ===================
+
+// FPL proxy endpoints (raw)
+app.get('/api/fpl/bootstrap', async (req, res) => {
+  try {
+    const data = await getBootstrapRaw();
+    res.json(data);
+  } catch (error) {
+    console.error('FPL bootstrap proxy error:', error);
+    res.status(503).json({ error: 'FPL servers busy', retryAfter: 5 });
+  }
+});
+
+app.get('/api/fpl/fixtures', async (req, res) => {
+  try {
+    const data = await getFixturesRaw();
+    res.json(data);
+  } catch (error) {
+    console.error('FPL fixtures proxy error:', error);
+    res.status(503).json({ error: 'FPL servers busy', retryAfter: 5 });
+  }
+});
+
+app.get('/api/fpl/event/:gw/live', async (req, res) => {
+  try {
+    const gw = parseInt(req.params.gw);
+    const data = await getLiveGameweekRaw(gw);
+    res.json(data);
+  } catch (error) {
+    console.error('FPL live proxy error:', error);
+    res.status(503).json({ error: 'FPL servers busy', retryAfter: 5 });
+  }
+});
+
+app.get('/api/fpl/element/:id/summary', async (req, res) => {
+  try {
+    const playerId = parseInt(req.params.id);
+    const data = await getPlayerSummaryRaw(playerId);
+    res.json(data);
+  } catch (error) {
+    console.error('FPL element summary proxy error:', error);
+    res.status(503).json({ error: 'FPL servers busy', retryAfter: 5 });
+  }
+});
+
+// Metrics (normalized)
+app.get('/api/metrics/player/:id', async (req, res) => {
+  try {
+    const playerId = parseInt(req.params.id);
+    const metrics = await buildPlayerMetrics(playerId);
+    if (!metrics) return res.status(404).json({ error: 'Player not found' });
+    res.json(metrics);
+  } catch (error) {
+    console.error('Player metrics error:', error);
+    res.status(500).json({ error: 'Failed to build player metrics' });
+  }
+});
+
+app.get('/api/metrics/team/:id', async (req, res) => {
+  try {
+    const teamId = parseInt(req.params.id);
+    const metrics = await buildTeamMetrics(teamId);
+    if (!metrics) return res.status(404).json({ error: 'Team not found' });
+    res.json(metrics);
+  } catch (error) {
+    console.error('Team metrics error:', error);
+    res.status(500).json({ error: 'Failed to build team metrics' });
+  }
+});
+
+app.get('/api/metrics/fixture/:id', async (req, res) => {
+  try {
+    const fixtureId = parseInt(req.params.id);
+    const context = await buildFixtureContext(fixtureId);
+    if (!context) return res.status(404).json({ error: 'Fixture not found' });
+    res.json(context);
+  } catch (error) {
+    console.error('Fixture metrics error:', error);
+    res.status(500).json({ error: 'Failed to build fixture context' });
+  }
+});
 
 // Bootstrap
 app.get('/api/bootstrap', async (req, res) => {
   try {
-    const data = await getBootstrap();
+    const data = await getBootstrapRaw();
     await loadData();
-    
+
     const currentGW = data.events.find(gw => gw.is_current) ?? data.events.find(gw => gw.is_next);
 
     res.json({
@@ -700,12 +888,12 @@ app.get('/api/player/:id', async (req, res) => {
     const playerId = parseInt(req.params.id);
     const horizon = parseInt(req.query.horizon) || 5;
 
-    const bootstrap = await getBootstrap();
+    const bootstrap = await getBootstrapRaw();
     const player = bootstrap.elements.find(p => p.id === playerId);
     if (!player) return res.status(404).json({ error: 'Player not found' });
 
     await loadData();
-    const summary = await getPlayerSummary(playerId);
+    const summary = await getPlayerSummaryRaw(playerId);
     const prediction = await calculatePrediction(player, horizon);
 
     const recentMatches = summary.history.slice(-5).map(h => {
@@ -733,238 +921,6 @@ app.get('/api/player/:id', async (req, res) => {
   }
 });
 
-app.get('/api/insights/player/:id', async (req, res) => {
-  try {
-    const playerId = parseInt(req.params.id);
-    const horizon = parseInt(req.query.horizon) || 5;
-    const cacheKey = `insights:player:${playerId}:${horizon}`;
-    const cached = insightsCache.get(cacheKey);
-    if (cached) return res.json(cached);
-
-    const bootstrap = await getBootstrap();
-    const player = bootstrap.elements.find(p => p.id === playerId);
-    if (!player) return res.status(404).json({ error: 'Player not found' });
-
-    await loadData();
-    const summary = await getPlayerSummary(playerId);
-    const context = await getInsightsContext(bootstrap);
-
-    const fixtures = summary.fixtures.slice(0, horizon).map(fix => {
-      const opponentId = fix.is_home ? fix.team_a : fix.team_h;
-      const opponent = teamsById.get(opponentId);
-      return {
-        fixtureId: fix.id ?? fix.fixture ?? fix.event ?? 0,
-        gameweek: fix.event,
-        opponent: opponent?.short_name ?? 'UNK',
-        opponentId,
-        opponentBadge: getTeamBadgeUrl(opponent),
-        isHome: fix.is_home,
-        difficulty: fix.difficulty,
-      };
-    });
-
-    const projection = projectPlayer({
-      player: {
-        ...player,
-        position: POSITION_MAP[player.element_type],
-        history: summary.history,
-      },
-      fixtures,
-      strengthMap: context.strengthMap,
-      avgGoalsPerGame: context.avgGoalsPerGame,
-      understatPlayers: context.understatMaps.players,
-      oddsMap: context.oddsMap,
-    });
-
-    const response = {
-      ...projection,
-      horizon,
-      estimated: projection.estimated || context.understatMaps.players.size === 0,
-    };
-
-    insightsCache.set(cacheKey, response, 90000);
-    res.json(response);
-  } catch (error) {
-    console.error('Insights player error:', error);
-    res.status(500).json({ error: 'Failed to build player insights' });
-  }
-});
-
-app.get('/api/insights/team/:id', async (req, res) => {
-  try {
-    const teamId = parseInt(req.params.id);
-    const horizon = parseInt(req.query.horizon) || 5;
-    const cacheKey = `insights:team:${teamId}:${horizon}`;
-    const cached = insightsCache.get(cacheKey);
-    if (cached) return res.json(cached);
-
-    const bootstrap = await getBootstrap();
-    await loadData();
-    const context = await getInsightsContext(bootstrap);
-
-    const fixtures = fixturesData
-      .filter(f => f.event !== null && f.team_h && f.team_a)
-      .filter(f => f.event >= (bootstrap.events.find(gw => gw.is_current)?.id ?? 1))
-      .filter(f => f.team_h === teamId || f.team_a === teamId)
-      .sort((a, b) => (a.event ?? 0) - (b.event ?? 0))
-      .slice(0, horizon)
-      .map(f => {
-        const isHome = f.team_h === teamId;
-        const opponentId = isHome ? f.team_a : f.team_h;
-        const opponent = teamsById.get(opponentId);
-        return {
-          fixtureId: f.id,
-          gameweek: f.event,
-          opponent: opponent?.short_name ?? 'UNK',
-          opponentId,
-          isHome,
-          difficulty: isHome ? f.team_h_difficulty : f.team_a_difficulty,
-        };
-      });
-
-    const projection = projectTeam({
-      teamId,
-      fixtures,
-      strengthMap: context.strengthMap,
-      avgGoalsPerGame: context.avgGoalsPerGame,
-      oddsMap: context.oddsMap,
-    });
-
-    const response = {
-      ...projection,
-      horizon,
-      estimated: projection.estimated || context.understatMaps.teams.size === 0,
-    };
-
-    insightsCache.set(cacheKey, response, 90000);
-    res.json(response);
-  } catch (error) {
-    console.error('Insights team error:', error);
-    res.status(500).json({ error: 'Failed to build team insights' });
-  }
-});
-
-app.get('/api/insights/fixture/:id', async (req, res) => {
-  try {
-    const fixtureId = parseInt(req.params.id);
-    const horizon = parseInt(req.query.horizon) || 5;
-    const cacheKey = `insights:fixture:${fixtureId}:${horizon}`;
-    const cached = insightsCache.get(cacheKey);
-    if (cached) return res.json(cached);
-
-    const bootstrap = await getBootstrap();
-    await loadData();
-    const fixture = fixturesData.find(f => f.id === fixtureId);
-    if (!fixture) return res.status(404).json({ error: 'Fixture not found' });
-
-    const context = await getInsightsContext(bootstrap);
-    const projection = projectFixture({
-      fixture: {
-        id: fixture.id,
-        homeTeamId: fixture.team_h,
-        awayTeamId: fixture.team_a,
-      },
-      teams: teamsById,
-      strengthMap: context.strengthMap,
-      avgGoalsPerGame: context.avgGoalsPerGame,
-      oddsMap: context.oddsMap,
-    });
-
-    const homePlayers = bootstrap.elements.filter(p => p.team === fixture.team_h);
-    const awayPlayers = bootstrap.elements.filter(p => p.team === fixture.team_a);
-
-    const buildKeyPlayers = async (teamPlayers) => {
-      // Filter to available players and sort by total points to prioritize key players
-      const topPlayers = teamPlayers
-        .filter(p => p.status === 'a' || p.status === 'd')
-        .sort((a, b) => (b.total_points ?? 0) - (a.total_points ?? 0))
-        .slice(0, 10); // Limit to top 10 to avoid too many API calls
-
-      const results = await Promise.all(
-        topPlayers.map(async (p) => {
-          // Fetch player history for accurate projections
-          let history = [];
-          try {
-            const summary = await getPlayerSummary(p.id);
-            history = summary.history || [];
-          } catch (e) {
-            // Continue with empty history if fetch fails
-          }
-
-          const playerProjection = projectPlayer({
-            player: {
-              ...p,
-              position: POSITION_MAP[p.element_type],
-              history,
-            },
-            fixtures: [
-              {
-                fixtureId: fixture.id,
-                gameweek: fixture.event ?? 1,
-                opponent: '',
-                opponentId: p.team === fixture.team_h ? fixture.team_a : fixture.team_h,
-                opponentBadge: '',
-                isHome: p.team === fixture.team_h,
-                difficulty: p.team === fixture.team_h ? fixture.team_h_difficulty : fixture.team_a_difficulty,
-              },
-            ],
-            strengthMap: context.strengthMap,
-            avgGoalsPerGame: context.avgGoalsPerGame,
-            understatPlayers: context.understatMaps.players,
-            oddsMap: context.oddsMap,
-          });
-
-          return {
-            id: p.id,
-            name: p.web_name,
-            position: POSITION_MAP[p.element_type],
-            photoCode: p.code,
-            xPts: playerProjection.xPts.nextFixture,
-          };
-        })
-      );
-
-      return results
-        .sort((a, b) => b.xPts - a.xPts)
-        .slice(0, 5);
-    };
-
-    // Build key players with full history data (parallel)
-    const [homeKeyPlayers, awayKeyPlayers] = await Promise.all([
-      buildKeyPlayers(homePlayers),
-      buildKeyPlayers(awayPlayers),
-    ]);
-
-    const response = {
-      fixtureId,
-      homeTeamId: fixture.team_h,
-      awayTeamId: fixture.team_a,
-      homeXG: projection.homeXG,
-      awayXG: projection.awayXG,
-      homeCS: projection.homeCS,
-      awayCS: projection.awayCS,
-      attackIndex: {
-        home: context.strengthMap.get(fixture.team_h)?.attackIndex ?? 1,
-        away: context.strengthMap.get(fixture.team_a)?.attackIndex ?? 1,
-      },
-      defenceIndex: {
-        home: context.strengthMap.get(fixture.team_h)?.defenceIndex ?? 1,
-        away: context.strengthMap.get(fixture.team_a)?.defenceIndex ?? 1,
-      },
-      homeKeyPlayers,
-      awayKeyPlayers,
-      estimated: projection.estimated || context.understatMaps.players.size === 0,
-      horizon,
-    };
-
-    insightsCache.set(cacheKey, response, 90000);
-    res.json(response);
-  } catch (error) {
-    console.error('Insights fixture error:', error);
-    res.status(500).json({ error: 'Failed to build fixture insights' });
-  }
-});
-
 // Recommendations
 app.post('/api/recommendations', async (req, res) => {
   try {
@@ -973,7 +929,7 @@ app.post('/api/recommendations', async (req, res) => {
       return res.status(400).json({ error: 'Invalid squad' });
     }
 
-    const bootstrap = await getBootstrap();
+    const bootstrap = await getBootstrapRaw();
     await loadData();
     const currentGW = bootstrap.events.find(gw => gw.is_current)?.id ?? 1;
 
@@ -1128,7 +1084,7 @@ app.get('/api/team-fixtures', async (req, res) => {
     const numWeeks = parseInt(req.query.weeks) || 6;
     await loadData();
 
-    const bootstrap = await getBootstrap();
+    const bootstrap = await getBootstrapRaw();
     const currentGW = bootstrap.events.find(gw => gw.is_current)?.id ?? 1;
 
     // Get top players per team
@@ -1174,7 +1130,7 @@ app.get('/api/team-fixtures', async (req, res) => {
     const teams = Array.from(teamsById.values()).map(t => {
       const stats = teamStats.get(t.id) || {};
       const momentum = teamMomentum.get(t.id) ?? 0.5;
-      
+
       return {
         id: t.id,
         name: t.name,
@@ -1239,8 +1195,8 @@ app.get('/api/team-fixtures', async (req, res) => {
 app.get('/api/live/:gw', async (req, res) => {
   try {
     const gw = parseInt(req.params.gw);
-    const liveData = await getLiveGameweek(gw);
-    const bootstrap = await getBootstrap();
+    const liveData = await getLiveGameweekRaw(gw);
+    const bootstrap = await getBootstrapRaw();
 
     const players = liveData.elements.map(e => {
       const player = bootstrap.elements.find(p => p.id === e.id);
@@ -1270,9 +1226,9 @@ app.get('/api/health', (req, res) => {
 });
 
 // Serve static files
-app.use(express.static(path.join(__dirname, 'client', 'dist')));
+app.use(express.static(path.join(__dirname, '..', 'client', 'dist')));
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'client', 'dist', 'index.html'));
+  res.sendFile(path.join(__dirname, '..', 'client', 'dist', 'index.html'));
 });
 
 app.listen(PORT, () => {
