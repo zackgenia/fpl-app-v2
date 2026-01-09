@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { getTeamFixtures } from '../api';
 import { Loading, ErrorMessage, TeamBadge, PlayerPhoto } from '../components';
+import { getFixtureStatus, type RawFixture } from '../utils/fixtureStatus';
 import type { EntityRef, TeamFixtureData, Fixture } from '../types';
 
 interface HoverInfo {
@@ -8,6 +9,13 @@ interface HoverInfo {
   rowTeamId: number;
   isHome: boolean;
   gameweek: number;
+  fixtureId: number;
+  x: number;
+  y: number;
+}
+
+interface LiveScoreTooltipInfo {
+  fixtureId: number;
   x: number;
   y: number;
 }
@@ -18,6 +26,7 @@ interface Props {
 
 export function FixtureTracker({ onEntityClick }: Props) {
   const [data, setData] = useState<{ teams: TeamFixtureData[]; fixtures: Fixture[]; currentGameweek: number } | null>(null);
+  const [liveFixtures, setLiveFixtures] = useState<RawFixture[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [numWeeks, setNumWeeks] = useState(6);
@@ -25,24 +34,46 @@ export function FixtureTracker({ onEntityClick }: Props) {
 
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
   const [isHoverVisible, setIsHoverVisible] = useState(false);
+  const [liveTooltip, setLiveTooltip] = useState<LiveScoreTooltipInfo | null>(null);
 
   const hoverEnterTimer = useRef<NodeJS.Timeout | null>(null);
   const hoverLeaveTimer = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    async function fetch() {
+    async function fetchData() {
       setLoading(true);
       try {
-        const result = await getTeamFixtures(numWeeks);
+        const [result, rawFixtures] = await Promise.all([
+          getTeamFixtures(numWeeks),
+          fetch('/api/fpl/fixtures').then(r => r.json()).catch(() => []),
+        ]);
         setData(result);
+        setLiveFixtures(Array.isArray(rawFixtures) ? rawFixtures : []);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load');
       } finally {
         setLoading(false);
       }
     }
-    fetch();
+    fetchData();
   }, [numWeeks]);
+
+  // Poll for live fixture updates (every 30s)
+  useEffect(() => {
+    const hasLive = liveFixtures.some(f => f.started && !f.finished);
+    if (!hasLive) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const rawFixtures = await fetch('/api/fpl/fixtures').then(r => r.json());
+        if (Array.isArray(rawFixtures)) {
+          setLiveFixtures(rawFixtures);
+        }
+      } catch {}
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [liveFixtures]);
 
   useEffect(() => {
     return () => {
@@ -82,11 +113,17 @@ export function FixtureTracker({ onEntityClick }: Props) {
     return new Map(data.teams.map(t => [t.id, t]));
   }, [data]);
 
+  // Memoized live fixture lookup
+  const liveFixtureMap = useMemo(() => {
+    return new Map(liveFixtures.map(f => [f.id, f]));
+  }, [liveFixtures]);
+
   const handleCellMouseEnter = useCallback((
     opponentId: number,
     rowTeamId: number,
     isHome: boolean,
     gameweek: number,
+    fixtureId: number,
     e: React.MouseEvent
   ) => {
     if (hoverLeaveTimer.current) {
@@ -94,7 +131,15 @@ export function FixtureTracker({ onEntityClick }: Props) {
       hoverLeaveTimer.current = null;
     }
 
-    const newHoverInfo: HoverInfo = { opponentId, rowTeamId, isHome, gameweek, x: e.clientX, y: e.clientY };
+    const newHoverInfo: HoverInfo = { opponentId, rowTeamId, isHome, gameweek, fixtureId, x: e.clientX, y: e.clientY };
+
+    // Set live tooltip if fixture is live
+    const liveFix = liveFixtureMap.get(fixtureId);
+    if (liveFix && liveFix.started && !liveFix.finished) {
+      setLiveTooltip({ fixtureId, x: e.clientX, y: e.clientY });
+    } else {
+      setLiveTooltip(null);
+    }
 
     if (isHoverVisible) {
       setHoverInfo(newHoverInfo);
@@ -103,7 +148,7 @@ export function FixtureTracker({ onEntityClick }: Props) {
       if (hoverEnterTimer.current) clearTimeout(hoverEnterTimer.current);
       hoverEnterTimer.current = setTimeout(() => setIsHoverVisible(true), 120);
     }
-  }, [isHoverVisible]);
+  }, [isHoverVisible, liveFixtureMap]);
 
   const handleCellMouseMove = useCallback((e: React.MouseEvent) => {
     if (hoverInfo) {
@@ -116,6 +161,7 @@ export function FixtureTracker({ onEntityClick }: Props) {
       clearTimeout(hoverEnterTimer.current);
       hoverEnterTimer.current = null;
     }
+    setLiveTooltip(null);
     hoverLeaveTimer.current = setTimeout(() => {
       setIsHoverVisible(false);
       setHoverInfo(null);
@@ -280,7 +326,7 @@ export function FixtureTracker({ onEntityClick }: Props) {
                         <td key={gw} className="py-2 px-1 text-center">
                           <div
                             className={`${getFdrClass(fix.difficulty)} rounded-sm p-1 mx-auto w-10 h-10 flex flex-col items-center justify-center cursor-pointer hover:scale-105 hover:ring-1 hover:ring-white/20 transition-all`}
-                            onMouseEnter={(e) => handleCellMouseEnter(fix.opponentId, team.id, fix.isHome, gw, e)}
+                            onMouseEnter={(e) => handleCellMouseEnter(fix.opponentId, team.id, fix.isHome, gw, fix.id, e)}
                             onMouseMove={handleCellMouseMove}
                             onMouseLeave={handleCellMouseLeave}
                             onClick={() => onEntityClick?.({ kind: 'fixture', id: fix.id })}
@@ -432,6 +478,36 @@ export function FixtureTracker({ onEntityClick }: Props) {
           )}
         </div>
       )}
+
+      {/* Live score tooltip */}
+      {liveTooltip && (() => {
+        const liveFix = liveFixtureMap.get(liveTooltip.fixtureId);
+        if (!liveFix) return null;
+        const status = getFixtureStatus(liveFix);
+        const homeTeam = teamsById.get(liveFix.team_h);
+        const awayTeam = teamsById.get(liveFix.team_a);
+        return (
+          <div
+            className="fixed z-[60] bg-slate-900 border border-emerald-500/50 rounded px-3 py-2 shadow-lg pointer-events-none"
+            style={{
+              top: liveTooltip.y - 60,
+              left: liveTooltip.x + 15,
+            }}
+          >
+            <div className="flex items-center gap-2 text-sm">
+              <span className="inline-block w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+              <span className="text-emerald-400 font-semibold text-xs">{status.display}</span>
+            </div>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-slate-300 font-medium text-xs">{homeTeam?.shortName ?? 'HOME'}</span>
+              <span className="text-emerald-400 font-bold tabular-nums">{status.score?.home ?? 0}</span>
+              <span className="text-slate-500">-</span>
+              <span className="text-emerald-400 font-bold tabular-nums">{status.score?.away ?? 0}</span>
+              <span className="text-slate-300 font-medium text-xs">{awayTeam?.shortName ?? 'AWAY'}</span>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
