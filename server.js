@@ -1,6 +1,16 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const {
+  buildTeamStrength,
+  projectFixture,
+  projectPlayer,
+  projectTeam,
+  loadUnderstatSnapshot,
+  loadOddsSnapshot,
+  buildUnderstatMaps,
+  buildOddsMap,
+} = require('./shared/insights');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -35,6 +45,7 @@ class Cache {
 
 const cache = new Cache(300000);
 const longCache = new Cache(1800000);
+const insightsCache = new Cache(90000);
 
 // ===================
 // FPL API SERVICE
@@ -178,6 +189,31 @@ async function loadData() {
   }
 
   longCache.set(cacheKey, true);
+}
+
+async function getInsightsContext(bootstrap) {
+  const cached = insightsCache.get('context');
+  if (cached) return cached;
+
+  const understatSnapshot = await loadUnderstatSnapshot();
+  const oddsSnapshot = await loadOddsSnapshot();
+  const understatMaps = buildUnderstatMaps(understatSnapshot);
+  const oddsMap = buildOddsMap(oddsSnapshot);
+  const { strengthMap, avgGoalsPerGame } = buildTeamStrength({
+    teams: bootstrap.teams,
+    teamStats,
+    understatTeams: understatMaps.teams,
+  });
+
+  const context = {
+    understatMaps,
+    oddsMap,
+    strengthMap,
+    avgGoalsPerGame,
+  };
+
+  insightsCache.set('context', context, 60000);
+  return context;
 }
 
 // ===================
@@ -546,6 +582,214 @@ app.get('/api/player/:id', async (req, res) => {
   } catch (error) {
     console.error('Player error:', error);
     res.status(500).json({ error: 'Failed to fetch player' });
+  }
+});
+
+app.get('/api/insights/player/:id', async (req, res) => {
+  try {
+    const playerId = parseInt(req.params.id);
+    const horizon = parseInt(req.query.horizon) || 5;
+    const cacheKey = `insights:player:${playerId}:${horizon}`;
+    const cached = insightsCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
+    const bootstrap = await getBootstrap();
+    const player = bootstrap.elements.find(p => p.id === playerId);
+    if (!player) return res.status(404).json({ error: 'Player not found' });
+
+    await loadData();
+    const summary = await getPlayerSummary(playerId);
+    const context = await getInsightsContext(bootstrap);
+
+    const fixtures = summary.fixtures.slice(0, horizon).map(fix => {
+      const opponentId = fix.is_home ? fix.team_a : fix.team_h;
+      const opponent = teamsById.get(opponentId);
+      return {
+        fixtureId: fix.id ?? fix.fixture ?? fix.event ?? 0,
+        gameweek: fix.event,
+        opponent: opponent?.short_name ?? 'UNK',
+        opponentId,
+        opponentBadge: getTeamBadgeUrl(opponent),
+        isHome: fix.is_home,
+        difficulty: fix.difficulty,
+      };
+    });
+
+    const projection = projectPlayer({
+      player: {
+        ...player,
+        position: POSITION_MAP[player.element_type],
+        history: summary.history,
+      },
+      fixtures,
+      strengthMap: context.strengthMap,
+      avgGoalsPerGame: context.avgGoalsPerGame,
+      understatPlayers: context.understatMaps.players,
+      oddsMap: context.oddsMap,
+    });
+
+    const response = {
+      ...projection,
+      horizon,
+      estimated: projection.estimated || context.understatMaps.players.size === 0,
+    };
+
+    insightsCache.set(cacheKey, response, 90000);
+    res.json(response);
+  } catch (error) {
+    console.error('Insights player error:', error);
+    res.status(500).json({ error: 'Failed to build player insights' });
+  }
+});
+
+app.get('/api/insights/team/:id', async (req, res) => {
+  try {
+    const teamId = parseInt(req.params.id);
+    const horizon = parseInt(req.query.horizon) || 5;
+    const cacheKey = `insights:team:${teamId}:${horizon}`;
+    const cached = insightsCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
+    const bootstrap = await getBootstrap();
+    await loadData();
+    const context = await getInsightsContext(bootstrap);
+
+    const fixtures = fixturesData
+      .filter(f => f.event !== null && f.team_h && f.team_a)
+      .filter(f => f.event >= (bootstrap.events.find(gw => gw.is_current)?.id ?? 1))
+      .filter(f => f.team_h === teamId || f.team_a === teamId)
+      .sort((a, b) => (a.event ?? 0) - (b.event ?? 0))
+      .slice(0, horizon)
+      .map(f => {
+        const isHome = f.team_h === teamId;
+        const opponentId = isHome ? f.team_a : f.team_h;
+        const opponent = teamsById.get(opponentId);
+        return {
+          fixtureId: f.id,
+          gameweek: f.event,
+          opponent: opponent?.short_name ?? 'UNK',
+          opponentId,
+          isHome,
+          difficulty: isHome ? f.team_h_difficulty : f.team_a_difficulty,
+        };
+      });
+
+    const projection = projectTeam({
+      teamId,
+      fixtures,
+      strengthMap: context.strengthMap,
+      avgGoalsPerGame: context.avgGoalsPerGame,
+      oddsMap: context.oddsMap,
+    });
+
+    const response = {
+      ...projection,
+      horizon,
+      estimated: projection.estimated || context.understatMaps.teams.size === 0,
+    };
+
+    insightsCache.set(cacheKey, response, 90000);
+    res.json(response);
+  } catch (error) {
+    console.error('Insights team error:', error);
+    res.status(500).json({ error: 'Failed to build team insights' });
+  }
+});
+
+app.get('/api/insights/fixture/:id', async (req, res) => {
+  try {
+    const fixtureId = parseInt(req.params.id);
+    const horizon = parseInt(req.query.horizon) || 5;
+    const cacheKey = `insights:fixture:${fixtureId}:${horizon}`;
+    const cached = insightsCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
+    const bootstrap = await getBootstrap();
+    await loadData();
+    const fixture = fixturesData.find(f => f.id === fixtureId);
+    if (!fixture) return res.status(404).json({ error: 'Fixture not found' });
+
+    const context = await getInsightsContext(bootstrap);
+    const projection = projectFixture({
+      fixture: {
+        id: fixture.id,
+        homeTeamId: fixture.team_h,
+        awayTeamId: fixture.team_a,
+      },
+      teams: teamsById,
+      strengthMap: context.strengthMap,
+      avgGoalsPerGame: context.avgGoalsPerGame,
+      oddsMap: context.oddsMap,
+    });
+
+    const homePlayers = bootstrap.elements.filter(p => p.team === fixture.team_h);
+    const awayPlayers = bootstrap.elements.filter(p => p.team === fixture.team_a);
+
+    const buildKeyPlayers = teamPlayers => {
+      return teamPlayers
+        .filter(p => p.status === 'a' || p.status === 'd')
+        .map(p => {
+          const playerProjection = projectPlayer({
+            player: {
+              ...p,
+              position: POSITION_MAP[p.element_type],
+              history: [],
+            },
+            fixtures: [
+              {
+                fixtureId: fixture.id,
+                gameweek: fixture.event ?? 1,
+                opponent: '',
+                opponentId: p.team === fixture.team_h ? fixture.team_a : fixture.team_h,
+                opponentBadge: '',
+                isHome: p.team === fixture.team_h,
+                difficulty: p.team === fixture.team_h ? fixture.team_h_difficulty : fixture.team_a_difficulty,
+              },
+            ],
+            strengthMap: context.strengthMap,
+            avgGoalsPerGame: context.avgGoalsPerGame,
+            understatPlayers: context.understatMaps.players,
+            oddsMap: context.oddsMap,
+          });
+          return {
+            id: p.id,
+            name: p.web_name,
+            position: POSITION_MAP[p.element_type],
+            photoCode: p.code,
+            xPts: playerProjection.xPts.nextFixture,
+          };
+        })
+        .sort((a, b) => b.xPts - a.xPts)
+        .slice(0, 5);
+    };
+
+    const response = {
+      fixtureId,
+      homeTeamId: fixture.team_h,
+      awayTeamId: fixture.team_a,
+      homeXG: projection.homeXG,
+      awayXG: projection.awayXG,
+      homeCS: projection.homeCS,
+      awayCS: projection.awayCS,
+      attackIndex: {
+        home: context.strengthMap.get(fixture.team_h)?.attackIndex ?? 1,
+        away: context.strengthMap.get(fixture.team_a)?.attackIndex ?? 1,
+      },
+      defenceIndex: {
+        home: context.strengthMap.get(fixture.team_h)?.defenceIndex ?? 1,
+        away: context.strengthMap.get(fixture.team_a)?.defenceIndex ?? 1,
+      },
+      homeKeyPlayers: buildKeyPlayers(homePlayers),
+      awayKeyPlayers: buildKeyPlayers(awayPlayers),
+      estimated: projection.estimated || context.understatMaps.players.size === 0,
+      horizon,
+    };
+
+    insightsCache.set(cacheKey, response, 90000);
+    res.json(response);
+  } catch (error) {
+    console.error('Insights fixture error:', error);
+    res.status(500).json({ error: 'Failed to build fixture insights' });
   }
 });
 

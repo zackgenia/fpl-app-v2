@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { usePlayerDetailData } from '../hooks/useDrawerData';
+import { usePlayerDetailData, usePlayerInsightsData } from '../hooks/useDrawerData';
 import type { EntityRef } from '../types';
 import { ErrorMessage, FdrChip, Loading, PlayerPhoto, TeamBadge } from './ui';
 import { StatsSection } from './StatsSection';
@@ -17,6 +17,7 @@ export function PlayerDetails({
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const { data, loading, error } = usePlayerDetailData(playerId, isActive);
+  const { data: insights } = usePlayerInsightsData(playerId, isActive, 5);
 
   const player = data?.player;
   const positionLabel = player?.position ?? 'MID';
@@ -29,6 +30,10 @@ export function PlayerDetails({
   if (loading) return <Loading message="Loading player..." />;
   if (error) return <ErrorMessage message={error} />;
   if (!player) return null;
+
+  const predictedNext5 = insights?.xPts.next5 ?? player.predictedPointsN;
+  const predictedNextFixture = insights?.xPts.nextFixture ?? player.predictedPointsN;
+  const predictedNext3 = insights?.xPts.next3 ?? player.predictedPointsN;
 
   return (
     <div className="space-y-4">
@@ -53,8 +58,9 @@ export function PlayerDetails({
           </div>
         </div>
         <div className="text-right">
-          <p className="text-xs text-slate-500">Predicted</p>
-          <p className="text-lg font-bold text-emerald-600">{player.predictedPointsN.toFixed(1)} pts</p>
+          <p className="text-xs text-slate-500">Predicted (Next 5)</p>
+          <p className="text-lg font-bold text-emerald-600">{predictedNext5.toFixed(1)} pts</p>
+          {insights?.estimated && <p className="text-[10px] text-slate-400">Estimated</p>}
         </div>
       </div>
 
@@ -78,6 +84,56 @@ export function PlayerDetails({
 
       {activeTab === 'overview' && (
         <div className="space-y-4">
+          <StatsSection title="Predicted Points">
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="rounded-lg bg-slate-50 p-2">
+                <p className="text-xs text-slate-500">Next Fixture</p>
+                <p className="text-lg font-semibold text-slate-800">{predictedNextFixture.toFixed(1)}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-2">
+                <p className="text-xs text-slate-500">Next 3</p>
+                <p className="text-lg font-semibold text-slate-800">{predictedNext3.toFixed(1)}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-2">
+                <p className="text-xs text-slate-500">Next 5</p>
+                <p className="text-lg font-semibold text-slate-800">{predictedNext5.toFixed(1)}</p>
+              </div>
+            </div>
+            {insights && (
+              <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 flex items-center justify-between">
+                <span>Confidence band</span>
+                <span className="font-semibold text-slate-800">
+                  {insights.xPts.low.toFixed(1)} / {predictedNext5.toFixed(1)} / {insights.xPts.high.toFixed(1)}
+                </span>
+              </div>
+            )}
+          </StatsSection>
+
+          <StatsSection title="xPts Breakdown">
+            <div className="grid grid-cols-2 gap-3 text-center">
+              <div className="rounded-lg bg-slate-50 p-2">
+                <p className="text-xs text-slate-500">Appearance</p>
+                <p className="text-lg font-semibold text-slate-800">{(insights?.breakdown.appearance ?? 0).toFixed(2)}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-2">
+                <p className="text-xs text-slate-500">xG Pts</p>
+                <p className="text-lg font-semibold text-slate-800">{(insights?.breakdown.goals ?? 0).toFixed(2)}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-2">
+                <p className="text-xs text-slate-500">xA Pts</p>
+                <p className="text-lg font-semibold text-slate-800">{(insights?.breakdown.assists ?? 0).toFixed(2)}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-2">
+                <p className="text-xs text-slate-500">CS Pts</p>
+                <p className="text-lg font-semibold text-slate-800">{(insights?.breakdown.cleanSheet ?? 0).toFixed(2)}</p>
+              </div>
+            </div>
+            <div className="mt-3 rounded-lg bg-slate-50 p-2 text-center">
+              <p className="text-xs text-slate-500">Bonus</p>
+              <p className="text-lg font-semibold text-slate-800">{(insights?.breakdown.bonus ?? 0).toFixed(2)}</p>
+            </div>
+          </StatsSection>
+
           <StatsSection title="Season Snapshot">
             <div className="grid grid-cols-3 gap-3 text-center">
               <div className="rounded-lg bg-slate-50 p-2">
@@ -99,10 +155,27 @@ export function PlayerDetails({
             {fixtureList.length === 0 ? (
               <p className="text-sm text-slate-500">Coming soon</p>
             ) : (
-              <div className="flex items-center gap-2 flex-wrap">
-                {fixtureList.map((fixture, idx) => (
-                  <FdrChip key={`${fixture.opponent}-${idx}`} difficulty={fixture.difficulty} opponent={fixture.opponent} isHome={fixture.isHome} size="md" />
-                ))}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {fixtureList.map((fixture, idx) => (
+                    <FdrChip key={`${fixture.opponent}-${idx}`} difficulty={fixture.difficulty} opponent={fixture.opponent} isHome={fixture.isHome} size="md" />
+                  ))}
+                </div>
+                {insights?.fixtures?.length ? (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {insights.fixtures.map(fixture => (
+                      <button
+                        key={`xpts-${fixture.fixtureId}`}
+                        type="button"
+                        className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700"
+                      >
+                        {fixture.opponent} {fixture.expectedPoints.toFixed(1)} xPts
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400">xPts chips coming soon</p>
+                )}
               </div>
             )}
           </StatsSection>
@@ -209,6 +282,41 @@ export function PlayerDetails({
               <p className="text-xs text-slate-500 mt-3">Shot quality breakdown coming soon.</p>
             </StatsSection>
           )}
+
+          <StatsSection title="Advanced Metrics">
+            <div className="grid grid-cols-2 gap-3 text-center">
+              <div className="rounded-lg bg-slate-50 p-2">
+                <p className="text-xs text-slate-500">xG</p>
+                <p className="text-lg font-semibold text-slate-800">{(insights?.advanced.xG ?? 0).toFixed(2)}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-2">
+                <p className="text-xs text-slate-500">xA</p>
+                <p className="text-lg font-semibold text-slate-800">{(insights?.advanced.xA ?? 0).toFixed(2)}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-2">
+                <p className="text-xs text-slate-500">xGI</p>
+                <p className="text-lg font-semibold text-slate-800">{(insights?.advanced.xGI ?? 0).toFixed(2)}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-2">
+                <p className="text-xs text-slate-500">xGI/90</p>
+                <p className="text-lg font-semibold text-slate-800">{(insights?.advanced.xGI90 ?? 0).toFixed(2)}</p>
+              </div>
+            </div>
+            {insights && (insights.advanced.shots !== null || insights.advanced.bigChances !== null) ? (
+              <div className="mt-3 grid grid-cols-2 gap-3 text-center">
+                <div className="rounded-lg bg-slate-50 p-2">
+                  <p className="text-xs text-slate-500">Shots</p>
+                  <p className="text-lg font-semibold text-slate-800">{insights?.advanced.shots ?? 0}</p>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-2">
+                  <p className="text-xs text-slate-500">Big Chances</p>
+                  <p className="text-lg font-semibold text-slate-800">{insights?.advanced.bigChances ?? 0}</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500 mt-3">Understat shot breakdown coming soon.</p>
+            )}
+          </StatsSection>
         </div>
       )}
     </div>
