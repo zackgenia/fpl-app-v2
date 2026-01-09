@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ErrorMessage, Loading, GameweekSelector, LiveFixturesHub, PlayerPointsPanel } from '../components';
+import { ErrorMessage, Loading, GameweekSelector, LiveFixturesHub, PlayerPointsPanel, FixtureDetailsDrawer } from '../components';
 import { getGameweekStatus, type RawFixture } from '../utils/fixtureStatus';
 
 const PREVIEW_LIMIT = 120;
@@ -75,6 +75,7 @@ export default function Live({ onPlayerClick }: { onPlayerClick?: (id: number) =
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
+  const [selectedFixtureId, setSelectedFixtureId] = useState<number | null>(null);
 
   // Load bootstrap and fixtures
   const loadInitial = useCallback(async () => {
@@ -246,10 +247,7 @@ export default function Live({ onPlayerClick }: { onPlayerClick?: (id: number) =
         <LiveFixturesHub
           fixtures={gwFixtures}
           teams={teamMap}
-          onFixtureClick={(id) => {
-            // Could open fixture drawer here
-            console.log('Fixture clicked:', id);
-          }}
+          onFixtureClick={(id) => setSelectedFixtureId(id)}
         />
       </div>
 
@@ -264,6 +262,13 @@ export default function Live({ onPlayerClick }: { onPlayerClick?: (id: number) =
           />
         </div>
       )}
+
+      {/* Fixture details drawer */}
+      <FixtureDetailsDrawer
+        fixtureId={selectedFixtureId}
+        onClose={() => setSelectedFixtureId(null)}
+        onPlayerClick={onPlayerClick}
+      />
     </div>
   );
 }

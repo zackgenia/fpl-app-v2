@@ -322,17 +322,33 @@ export function FixtureTracker({ onEntityClick }: Props) {
                       const fix = teamFixtures.find(f => f.gameweek === gw);
                       if (!fix) return <td key={gw} className="py-2 px-1 text-center"><div className="w-10 h-10 bg-slate-700/50 rounded-sm mx-auto" /></td>;
 
+                      // Check if this fixture has a score (finished or live)
+                      const liveFix = liveFixtureMap.get(fix.id);
+                      const hasScore = liveFix && (liveFix.started || liveFix.finished);
+                      const isLive = liveFix && liveFix.started && !liveFix.finished;
+                      const homeScore = liveFix?.team_h_score ?? 0;
+                      const awayScore = liveFix?.team_a_score ?? 0;
+                      const teamScore = fix.isHome ? homeScore : awayScore;
+                      const oppScore = fix.isHome ? awayScore : homeScore;
+
                       return (
                         <td key={gw} className="py-2 px-1 text-center">
                           <div
-                            className={`${getFdrClass(fix.difficulty)} rounded-sm p-1 mx-auto w-10 h-10 flex flex-col items-center justify-center cursor-pointer hover:scale-105 hover:ring-1 hover:ring-white/20 transition-all`}
+                            className={`${getFdrClass(fix.difficulty)} rounded-sm p-1 mx-auto w-12 h-12 flex flex-col items-center justify-center cursor-pointer hover:scale-105 hover:ring-1 hover:ring-white/20 transition-all relative ${isLive ? 'ring-1 ring-emerald-500/50' : ''}`}
                             onMouseEnter={(e) => handleCellMouseEnter(fix.opponentId, team.id, fix.isHome, gw, fix.id, e)}
                             onMouseMove={handleCellMouseMove}
                             onMouseLeave={handleCellMouseLeave}
                             onClick={() => onEntityClick?.({ kind: 'fixture', id: fix.id })}
                           >
                             <p className="font-bold text-[11px]">{fix.opponent}</p>
-                            <p className="text-[9px] opacity-75">{fix.isHome ? 'H' : 'A'}</p>
+                            {hasScore ? (
+                              <p className={`text-[10px] font-bold tabular-nums ${isLive ? 'text-emerald-300' : ''}`}>
+                                {teamScore}-{oppScore}
+                              </p>
+                            ) : (
+                              <p className="text-[9px] opacity-75">{fix.isHome ? 'H' : 'A'}</p>
+                            )}
+                            {isLive && <span className="absolute -top-1 -right-1 w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />}
                           </div>
                         </td>
                       );

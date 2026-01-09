@@ -6,3 +6,4 @@ export { Logo } from './Logo';
 export { GameweekSelector } from './GameweekSelector';
 export { LiveFixturesHub } from './LiveFixturesHub';
 export { PlayerPointsPanel } from './PlayerPointsPanel';
+export { FixtureDetailsDrawer } from './FixtureDetailsDrawer';

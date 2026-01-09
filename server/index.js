@@ -1369,7 +1369,17 @@ app.get('/api/team-fixtures', async (req, res) => {
     await loadData();
 
     const bootstrap = await getBootstrapRaw();
-    const currentGW = bootstrap.events.find(gw => gw.is_current)?.id ?? 1;
+    const fixturesRaw = await getFixturesRaw();
+    let startGW = bootstrap.events.find(gw => gw.is_current)?.id ?? 1;
+
+    // Check if current GW is completely finished - if so, show from next GW
+    const currentGwFixtures = fixturesRaw.filter(f => f.event === startGW);
+    const allFinished = currentGwFixtures.length > 0 && currentGwFixtures.every(f => f.finished);
+
+    // Only skip to next GW if all fixtures are finished
+    if (allFinished) {
+      startGW = startGW + 1;
+    }
 
     // Get top players per team
     const teamTopPlayers = new Map();
@@ -1436,7 +1446,7 @@ app.get('/api/team-fixtures', async (req, res) => {
 
     const fixtures = [];
     for (const f of fixturesData) {
-      if (f.event === null || f.event < currentGW || f.event >= currentGW + numWeeks) continue;
+      if (f.event === null || f.event < startGW || f.event >= startGW + numWeeks) continue;
 
       const homeTeam = teamsById.get(f.team_h);
       const awayTeam = teamsById.get(f.team_a);
@@ -1468,7 +1478,7 @@ app.get('/api/team-fixtures', async (req, res) => {
       });
     }
 
-    res.json({ teams, fixtures, currentGameweek: currentGW });
+    res.json({ teams, fixtures, currentGameweek: startGW });
   } catch (error) {
     console.error('Fixtures error:', error);
     res.status(500).json({ error: 'Failed to fetch fixtures' });
@@ -1501,6 +1511,205 @@ app.get('/api/live/:gw', async (req, res) => {
   } catch (error) {
     console.error('Live error:', error);
     res.status(500).json({ error: 'Failed to fetch live data' });
+  }
+});
+
+// Fixture details with match events
+app.get('/api/fixture/:id/details', async (req, res) => {
+  try {
+    const fixtureId = parseInt(req.params.id);
+    await loadData();
+
+    const fixturesData = await getFixturesRaw();
+    const fixture = fixturesData.find(f => f.id === fixtureId);
+    if (!fixture) return res.status(404).json({ error: 'Fixture not found' });
+
+    const bootstrap = await getBootstrapRaw();
+    const homeTeam = teamsById.get(fixture.team_h);
+    const awayTeam = teamsById.get(fixture.team_a);
+
+    // Parse match events from fixture stats
+    const goals = [];
+    const cards = [];
+
+    if (fixture.stats) {
+      // Goals
+      const goalStats = fixture.stats.find(s => s.identifier === 'goals_scored');
+      if (goalStats) {
+        for (const g of goalStats.h || []) {
+          const player = bootstrap.elements.find(p => p.id === g.element);
+          goals.push({
+            playerId: g.element,
+            playerName: player?.web_name ?? 'Unknown',
+            team: 'home',
+            minute: g.value, // This is actually the count, not minute - FPL doesn't give minutes
+          });
+        }
+        for (const g of goalStats.a || []) {
+          const player = bootstrap.elements.find(p => p.id === g.element);
+          goals.push({
+            playerId: g.element,
+            playerName: player?.web_name ?? 'Unknown',
+            team: 'away',
+            minute: g.value,
+          });
+        }
+      }
+
+      // Own goals
+      const ownGoalStats = fixture.stats.find(s => s.identifier === 'own_goals');
+      if (ownGoalStats) {
+        for (const g of ownGoalStats.h || []) {
+          const player = bootstrap.elements.find(p => p.id === g.element);
+          goals.push({
+            playerId: g.element,
+            playerName: player?.web_name ?? 'Unknown',
+            team: 'away', // Own goal counts for opposite team
+            isOwnGoal: true,
+            minute: g.value,
+          });
+        }
+        for (const g of ownGoalStats.a || []) {
+          const player = bootstrap.elements.find(p => p.id === g.element);
+          goals.push({
+            playerId: g.element,
+            playerName: player?.web_name ?? 'Unknown',
+            team: 'home',
+            isOwnGoal: true,
+            minute: g.value,
+          });
+        }
+      }
+
+      // Yellow cards
+      const yellowStats = fixture.stats.find(s => s.identifier === 'yellow_cards');
+      if (yellowStats) {
+        for (const c of yellowStats.h || []) {
+          const player = bootstrap.elements.find(p => p.id === c.element);
+          cards.push({
+            playerId: c.element,
+            playerName: player?.web_name ?? 'Unknown',
+            team: 'home',
+            type: 'yellow',
+          });
+        }
+        for (const c of yellowStats.a || []) {
+          const player = bootstrap.elements.find(p => p.id === c.element);
+          cards.push({
+            playerId: c.element,
+            playerName: player?.web_name ?? 'Unknown',
+            team: 'away',
+            type: 'yellow',
+          });
+        }
+      }
+
+      // Red cards
+      const redStats = fixture.stats.find(s => s.identifier === 'red_cards');
+      if (redStats) {
+        for (const c of redStats.h || []) {
+          const player = bootstrap.elements.find(p => p.id === c.element);
+          cards.push({
+            playerId: c.element,
+            playerName: player?.web_name ?? 'Unknown',
+            team: 'home',
+            type: 'red',
+          });
+        }
+        for (const c of redStats.a || []) {
+          const player = bootstrap.elements.find(p => p.id === c.element);
+          cards.push({
+            playerId: c.element,
+            playerName: player?.web_name ?? 'Unknown',
+            team: 'away',
+            type: 'red',
+          });
+        }
+      }
+    }
+
+    // Get live data for this gameweek to get player points
+    let topPerformers = { home: [], away: [] };
+    if (fixture.event) {
+      try {
+        const liveData = await getLiveGameweekRaw(fixture.event);
+
+        // Get players from both teams with their live points
+        const homePlayers = liveData.elements
+          .filter(e => {
+            const player = bootstrap.elements.find(p => p.id === e.id);
+            return player && player.team === fixture.team_h;
+          })
+          .map(e => {
+            const player = bootstrap.elements.find(p => p.id === e.id);
+            return {
+              id: e.id,
+              name: player?.web_name ?? 'Unknown',
+              points: e.stats.total_points,
+              goals: e.stats.goals_scored,
+              assists: e.stats.assists,
+              minutes: e.stats.minutes,
+              photoCode: player?.code,
+            };
+          })
+          .sort((a, b) => b.points - a.points)
+          .slice(0, 3);
+
+        const awayPlayers = liveData.elements
+          .filter(e => {
+            const player = bootstrap.elements.find(p => p.id === e.id);
+            return player && player.team === fixture.team_a;
+          })
+          .map(e => {
+            const player = bootstrap.elements.find(p => p.id === e.id);
+            return {
+              id: e.id,
+              name: player?.web_name ?? 'Unknown',
+              points: e.stats.total_points,
+              goals: e.stats.goals_scored,
+              assists: e.stats.assists,
+              minutes: e.stats.minutes,
+              photoCode: player?.code,
+            };
+          })
+          .sort((a, b) => b.points - a.points)
+          .slice(0, 3);
+
+        topPerformers = { home: homePlayers, away: awayPlayers };
+      } catch (err) {
+        // Live data not available yet
+      }
+    }
+
+    res.json({
+      id: fixture.id,
+      gameweek: fixture.event,
+      kickoffTime: fixture.kickoff_time,
+      started: fixture.started,
+      finished: fixture.finished,
+      finishedProvisional: fixture.finished_provisional,
+      minutes: fixture.minutes,
+      homeTeam: {
+        id: homeTeam?.id,
+        name: homeTeam?.name,
+        shortName: homeTeam?.short_name,
+        badge: getTeamBadgeUrl(homeTeam),
+        score: fixture.team_h_score,
+      },
+      awayTeam: {
+        id: awayTeam?.id,
+        name: awayTeam?.name,
+        shortName: awayTeam?.short_name,
+        badge: getTeamBadgeUrl(awayTeam),
+        score: fixture.team_a_score,
+      },
+      goals,
+      cards,
+      topPerformers,
+    });
+  } catch (error) {
+    console.error('Fixture details error:', error);
+    res.status(500).json({ error: 'Failed to fetch fixture details' });
   }
 });
 
